@@ -625,6 +625,7 @@ private:
     bool rowShows(int index) const;
     const nxui::Texture* gameIconTexture();
     nxui::Color accent(float a = 1.f) const;
+    nxui::Color onAccent(float a = 1.f) const; // text and icons drawn on the accent colour
     nxui::Color glassTint(float a = 1.f) const;
     bool isRunning(std::uint64_t id) const;
     std::uint64_t runningId() const;
