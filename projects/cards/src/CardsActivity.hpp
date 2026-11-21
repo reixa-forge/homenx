@@ -247,7 +247,6 @@ private:
     // L / R on the card row: a screenful of cards at a time.
     static constexpr int kCardsPerScreen = 5;
 
-    std::vector<Game>& games() { return m_pages[m_page]; }
     int& sel() { return m_sels[m_page]; }
     const Game* current();
 
