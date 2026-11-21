@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <deque>
 #include <mutex>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -38,6 +39,10 @@ struct WorkerPool {
         const int n = want;
         live += n;
         for (int i = 0; i < n; i++) {
+            // (Started from Run now, on whatever thread asks: a thread that
+            // can't be made, low on memory, leaves the pool smaller instead of
+            // throwing into Discord's callers. The job waits for the next Run.)
+            try {
             threads.emplace_back([this] {
                 nxui::moveToWorkerCores(); // HomeNX: keep core 0 for the menu's frames
                 while (true) {
@@ -54,6 +59,10 @@ struct WorkerPool {
                 Http::ThreadCleanup();
                 --live;
             });
+            } catch (const std::system_error&) {
+                live -= n - i;
+                break;
+            }
         }
     }
 

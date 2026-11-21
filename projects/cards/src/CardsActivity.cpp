@@ -3,6 +3,7 @@
 
 #include "social/NotificationLog.hpp"
 
+#include <system_error>
 #include <nxui/Application.hpp>
 #include <nxui/core/GpuDevice.hpp>
 #include <nxui/core/Renderer.hpp>
@@ -789,15 +790,19 @@ bool CardsActivity::onCreate() {
         if (isGame) {
             const std::uint64_t id = m_backTo;
             const AccountUidLike who = m_user;
-            m_backStatsJob = std::async(std::launch::async, [id, who]() {
-                nxui::moveToWorkerCores(); // (at the screen's priority: it's waited for)
-                BackStats out;
-                out.id = id;
-                const std::uint64_t t0 = armGetSystemTick();
-                out.ok = playStatistics(id, who, out.st);
-                out.ms = ticksMs(armGetSystemTick() - t0);
-                return out;
-            });
+            try { // (no thread to be had: its play time stays as it was, HOME still starts)
+                m_backStatsJob = std::async(std::launch::async, [id, who]() {
+                    nxui::moveToWorkerCores(); // (at the screen's priority: it's waited for)
+                    BackStats out;
+                    out.id = id;
+                    const std::uint64_t t0 = armGetSystemTick();
+                    out.ok = playStatistics(id, who, out.st);
+                    out.ms = ticksMs(armGetSystemTick() - t0);
+                    return out;
+                });
+            } catch (const std::system_error&) {
+                m_backStatsJob = {};
+            }
         }
     }
 #endif
@@ -4515,7 +4520,11 @@ void CardsActivity::startPickJob(std::function<std::vector<TitleChoice>()> work)
         return;
     }
     m_pickNext = nullptr;
-    m_pickJob = std::async(std::launch::async, std::move(work));
+    try { // (no thread to be had, low on memory: nothing found, not a crash)
+        m_pickJob = std::async(std::launch::async, std::move(work));
+    } catch (const std::system_error&) {
+        m_pickJob = {};
+    }
 }
 
 void CardsActivity::openTitlePicker(const Game& g, bool cover, const std::string& query, bool hero) {
@@ -4814,7 +4823,13 @@ void CardsActivity::drawPicker(nxui::Renderer& r) {
         startPickJob(std::move(m_pickNext));
     }
     if (m_pickJob.valid() && m_pickJob.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-        m_pickChoices = m_pickJob.get();
+        // (A search that ended with an error, out of memory say, shows nothing
+        // found: its exception reaching the screen's thread closed HOME.)
+        try {
+            m_pickChoices = m_pickJob.get();
+        } catch (...) {
+            m_pickChoices.clear();
+        }
         m_pickTex.clear();
         for (TitleChoice& c : m_pickChoices) {
             auto tex = std::make_unique<nxui::Texture>();

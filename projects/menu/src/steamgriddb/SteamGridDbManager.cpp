@@ -379,11 +379,14 @@ SteamGridDbManager::BrowseResult SteamGridDbManager::browse(
             for (std::size_t first = 0; first < ranked.size(); first += kProbesAtOnce) {
                 const std::size_t last = std::min(ranked.size(), first + kProbesAtOnce);
                 for (std::size_t i = first; i < last; ++i) {
-                    probes[i] = std::async(std::launch::async,
-                        [apiKey, kind, id = ranked[i].id]() {
-                            nxui::moveToWorkerCores(); // off the render core
-                            return probeGameHasArtwork(apiKey, id, kind);
-                        });
+                    try { // (no thread to be had: kept unprobed, as a failed probe is)
+                        probes[i] = std::async(std::launch::async,
+                            [apiKey, kind, id = ranked[i].id]() {
+                                nxui::moveToWorkerCores(); // off the render core
+                                return probeGameHasArtwork(apiKey, id, kind);
+                            });
+                    } catch (const std::system_error&) {
+                    }
                 }
                 for (std::size_t i = first; i < last; ++i) {
                     bool keep = true;
