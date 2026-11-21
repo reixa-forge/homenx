@@ -721,6 +721,8 @@ bool CardsActivity::onCreate() {
     applyOrder(kHomebrew);
     applyOrder(kNintendo);
     rebuildCustomPages();
+    if (m_settings.startedFresh)
+        say("Your settings file was damaged, so CardsNX started fresh. The old one is config/CardsNX/settings.json.bad.");
 
     // You: the one chosen in the pill, else the last account that played, else the first.
     AccountUidLike chosen;
@@ -1992,6 +1994,12 @@ void CardsActivity::applyOrder(int page) {
 void CardsActivity::takeSwitchUOrder() {
     if (m_settings.switchuOrder) return;
     m_settings.switchuOrder = true; // (once, whatever it finds)
+    // Only for someone with no order of their own here yet: taken over a My
+    // order already arranged in CardsNX, an update threw that order away.
+    if (!m_settings.order[kGames].empty()) {
+        m_settings.save();
+        return;
+    }
     std::ifstream f("sdmc:/config/SwitchU/layout.json");
     nlohmann::json j;
     try {
@@ -2069,11 +2077,17 @@ void CardsActivity::clearGameCardPresentation() {
 void CardsActivity::refreshGameCardPresentation() {
     if (m_gameCardEditDepth || m_moving || m_leaving) return;
     clearGameCardPresentation();
-    if (!m_settings.pinGameCard() || m_gameCard.status != GameCardStatus::Ready) {
+    // What's shown is m_pages with two changes: the inserted cartridge first
+    // (Settings > Game card), and the games moved onto a custom page left off
+    // their own page. m_pages keeps every game, so nothing is lost: a page
+    // deleted or hidden, or a game taken off it, and it's back as it was.
+    const bool pin = m_settings.pinGameCard() && m_gameCard.status == GameCardStatus::Ready;
+    const auto moved = movedToCustomPages();
+    if (!pin && moved.empty()) {
         for (auto& id : m_gameCardDetachedSel) id = 0;
         return;
     }
-    std::vector<Game> inserted = m_gameCard.games;
+    std::vector<Game> inserted = pin ? m_gameCard.games : std::vector<Game>{};
     dropHidden(inserted);
     for (Game& title : inserted) {
         const auto currentFlags = title.flags;
@@ -2088,13 +2102,34 @@ void CardsActivity::refreshGameCardPresentation() {
         const int index = std::clamp(m_sels[page], 0, std::max(0, static_cast<int>(source.size()) - 1));
         const std::uint64_t id = m_gameCardDetachedSel[page] ? m_gameCardDetachedSel[page]
                                 : source.empty() ? 0 : source[static_cast<size_t>(index)].id;
-        m_gameCardPages[page] = presentGameCards(source, inserted);
+        if (page < kPageCount && !moved.empty()) {
+            std::vector<Game> kept;
+            kept.reserve(source.size());
+            for (const Game& game : source)
+                if (!moved.count(game.id)) kept.push_back(game);
+            m_gameCardPages[page] = presentGameCards(kept, inserted);
+        } else {
+            m_gameCardPages[page] = presentGameCards(source, inserted);
+        }
         m_sels[page] = gameCardSelection(m_gameCardPages[page], id, index);
         m_gameCardDetachedSel[page] = 0;
     }
     m_gameCardPinned = true;
     m_scroll += static_cast<float>(sel() - previous);
     requeueArt();
+}
+
+// Every title moved onto a custom page that shows (a hidden page gives its games back).
+std::unordered_set<std::uint64_t> CardsActivity::movedToCustomPages() const {
+    std::unordered_set<std::uint64_t> out;
+    for (int page = kPageCount; page < pageCount(); ++page) {
+        if (pageHidden(page)) continue;
+        for (const auto& id : m_settings.customPages[static_cast<size_t>(page - kPageCount)].moved) {
+            const std::uint64_t n = std::strtoull(id.c_str(), nullptr, 16);
+            if (n) out.insert(n);
+        }
+    }
+    return out;
 }
 
 void CardsActivity::updateGameCard(float dt) {
@@ -2440,6 +2475,8 @@ void CardsActivity::openPageShow() {
             }
             m_settings.save();
             if (pageHidden(m_page)) goToPage(firstShownPage(), 0);
+            refreshGameCardPresentation(); // (a hidden custom page gives its moved games back)
+            requeueArt();
         }));
     items.push_back(action("Done", [] {}));
     openMenu("Pages to show", std::move(items));
@@ -4016,16 +4053,22 @@ void CardsActivity::openOptions() {
     }
 #endif
     if (g.action.empty()) {
-        items.push_back(action("Add to custom page", [this, g]() { addToCustomPage(g); }));
+        items.push_back(action(m_settings.customPagesMove ? "Move to custom page" : "Add to custom page",
+                               [this, g]() { addToCustomPage(g); }));
         items.back().glyph = "copy";
         if (m_page >= kPageCount) {
             const int page = m_page;
-            items.push_back(action("Remove from this page", [this, g, page]() {
-                auto& ids = m_settings.customPages[page - kPageCount].titles;
-                ids.erase(std::remove(ids.begin(), ids.end(), idText(g.id)), ids.end());
+            const auto& here = m_settings.customPages[page - kPageCount].moved;
+            const bool movedHere = std::find(here.begin(), here.end(), idText(g.id)) != here.end();
+            items.push_back(action(movedHere ? "Put back on its page" : "Remove from this page", [this, g, page, movedHere]() {
+                LibraryEdit edit(*this);
+                auto& custom = m_settings.customPages[page - kPageCount];
+                for (auto* ids : {&custom.titles, &custom.moved})
+                    ids->erase(std::remove(ids->begin(), ids->end(), idText(g.id)), ids->end());
                 m_settings.save();
                 rebuildCustomPages();
                 requeueArt();
+                if (movedHere) say(trf("{game} is back on its own page.", {g.name}));
             }));
             items.back().glyph = "trash";
         }
@@ -4895,7 +4938,32 @@ void CardsActivity::startMove() {
         refreshGameCardPresentation();
         return;
     }
+    // (the presentation is off while moving: the games moved onto a custom
+    // page are set aside, so they don't come back for the move)
+    m_moveSetAside.clear();
+    if (m_page < kPageCount) {
+        const auto moved = movedToCustomPages();
+        if (!moved.empty() && !moved.count(id)) {
+            auto& list = m_pages[m_page];
+            m_moveSetAside = list;
+            list.erase(std::remove_if(list.begin(), list.end(), [&](const Game& g) { return moved.count(g.id) > 0; }),
+                       list.end());
+            const int was = sel();
+            sel() = gameCardSelection(list, id, sel());
+            m_scroll += static_cast<float>(sel() - was); // (the row doesn't jump)
+            if (list.size() == m_moveSetAside.size()) m_moveSetAside.clear(); // (none were here)
+        }
+    }
+    auto putBack = [this, id]() {
+        if (m_moveSetAside.empty()) return;
+        m_pages[m_page] = std::move(m_moveSetAside);
+        m_moveSetAside.clear();
+        const int was = sel();
+        sel() = gameCardSelection(m_pages[m_page], id, sel());
+        m_scroll += static_cast<float>(sel() - was);
+    };
     if (games().size() < 2) {
+        putBack();
         refreshGameCardPresentation();
         say("There's nothing to move it past.");
         return;
@@ -4922,6 +4990,13 @@ void CardsActivity::finishMove(bool keep) {
         arrange(std::move(m_moveBefore));
         m_moveBefore.clear();
         sel() = m_moveBeforeSel;
+        if (!m_moveSetAside.empty()) { // (the list as it was, the set-aside ones too)
+            m_pages[m_page] = std::move(m_moveSetAside);
+            m_moveSetAside.clear();
+            const int was = sel();
+            sel() = gameCardSelection(m_pages[m_page], m_moveId, sel());
+            m_scroll += static_cast<float>(sel() - was);
+        }
         if (gridOn()) gridSlideTo(sel() / kGridPer);
         m_bgId = m_bgPrevId = m_moveId;
         m_audio.play("hide_modal");
@@ -4929,6 +5004,14 @@ void CardsActivity::finishMove(bool keep) {
         return;
     }
     m_moveBefore.clear();
+    if (!m_moveSetAside.empty()) { // the set-aside ones after the rest (where they come back)
+        auto& list = m_pages[m_page];
+        for (Game& g : m_moveSetAside)
+            if (std::none_of(list.begin(), list.end(), [&](const Game& x) { return x.id == g.id; }))
+                list.push_back(std::move(g));
+        m_moveSetAside.clear();
+        sel() = gameCardSelection(list, m_moveId, sel()); // (appended after: the index is the same)
+    }
     saveOrder(m_page);
     if (m_page == kGames) m_settings.sort = 3; // the order shown is yours now
     m_settings.save();
@@ -6386,6 +6469,11 @@ void CardsActivity::buildSettings() {
     shown.detail = "Hide a page you don't use: ZL / ZR skip it";
     home.rows.push_back(std::move(shown));
     home.rows.push_back(action("Custom pages", [this]() { m_sheetOpen = false; openCustomPages(); }));
+    home.rows.push_back(toggle("Move games to custom pages", [this]() { return m_settings.customPagesMove; },
+        [this, save]() {
+            m_settings.customPagesMove = !m_settings.customPagesMove;
+            save();
+        }, "On: + moves a game onto a custom page, off its own page (no copies). Deleting the page puts it back. Off: + adds a copy"));
     home.rows.push_back(choice("Sort games", [this]() { return std::string(kSortNames[m_settings.sort]); },
         [this, save](int d) {
             int at = 0;
@@ -8195,6 +8283,8 @@ void CardsActivity::openPlayerList() {
     };
     std::vector<Row> rows;
     rows.reserve(m_nextendoGames.size());
+    int unnamed = 0; // counted in the total, but with no name to show: one row at the end
+    std::vector<std::uint64_t> unnamedTitles;
     for (const NextendoGame& g : m_nextendoGames) {
         if (g.titles.empty()) continue;
         std::string name = g.name;
@@ -8205,11 +8295,15 @@ void CardsActivity::openPlayerList() {
                         && std::find(g.titles.begin(), g.titles.end(), game.id) != g.titles.end())
                         name = game.name;
         }
-        if (name.empty()) continue; // a count with no name is not a row anyone can read
         int n = std::max(0, g.players);
         for (std::uint64_t id : g.titles) {
             const auto it = m_players.find(id);
             if (it != m_players.end()) n = std::max(n, it->second);
+        }
+        if (name.empty()) { // (the total counts it: so does the list)
+            unnamed += n;
+            unnamedTitles.insert(unnamedTitles.end(), g.titles.begin(), g.titles.end());
+            continue;
         }
         rows.push_back(Row{std::move(name), n, g.titles});
     }
@@ -8217,6 +8311,7 @@ void CardsActivity::openPlayerList() {
         if (a.players != b.players) return a.players > b.players;
         return a.name < b.name;
     });
+    if (unnamed > 0) rows.push_back(Row{tr("Other games"), unnamed, std::move(unnamedTitles)});
     std::vector<MenuItem> items;
     items.reserve(rows.size());
     for (const Row& row : rows) {
@@ -12116,6 +12211,7 @@ void CardsActivity::editCustomPage(int page) {
             auto& hidden = m_settings.hiddenPages;
             hidden.erase(std::remove(hidden.begin(), hidden.end(), page), hidden.end());
             m_settings.save();
+            refreshGameCardPresentation(); // (shown again: its moved games off their pages again)
             goToPage(page);
         }),
         action("Rename page", [this, page]() {
@@ -12130,6 +12226,8 @@ void CardsActivity::editCustomPage(int page) {
             openMenu("Delete this page? Your games and apps stay installed.", {
                 action("Delete page", [this, page]() {
                     if (page >= pageCount()) return;
+                    LibraryEdit edit(*this); // (shown again without it: its moved games back on their pages)
+                    const bool hadMoved = !m_settings.customPages[page - kPageCount].moved.empty();
                     m_settings.customPages.erase(m_settings.customPages.begin() + page - kPageCount);
                     for (auto* list : {&m_settings.pageOrder, &m_settings.hiddenPages}) {
                         list->erase(std::remove(list->begin(), list->end(), page), list->end());
@@ -12142,23 +12240,38 @@ void CardsActivity::editCustomPage(int page) {
                     rebuildCustomPages();
                     requeueArt();
                     openCustomPages();
+                    if (hadMoved) say("The games moved to that page are back on their own pages.");
                 }, true), action("Cancel", [] {})});
         }, true), action("Back", [this]() { openCustomPages(); })});
 }
 
+// + > Add to (or Move to) custom page. Moving takes the game off its own page,
+// and off any other custom page it had been moved to (one place at a time);
+// adding leaves it where it is, as a copy.
 void CardsActivity::addToCustomPage(const Game& game) {
+    const bool move = m_settings.customPagesMove;
     std::vector<MenuItem> items;
     for (int page = kPageCount; page < pageCount(); ++page)
-        items.push_back(action(pageName(page), [this, page, game]() {
-            auto& titles = m_settings.customPages[page - kPageCount].titles;
+        items.push_back(action(pageName(page), [this, page, game, move]() {
+            LibraryEdit edit(*this);
             const std::string id = idText(game.id);
-            if (std::find(titles.begin(), titles.end(), id) == titles.end()) titles.push_back(id);
+            if (move)
+                for (int other = kPageCount; other < pageCount(); ++other) {
+                    if (other == page) continue;
+                    auto& o = m_settings.customPages[other - kPageCount];
+                    if (std::find(o.moved.begin(), o.moved.end(), id) == o.moved.end()) continue;
+                    for (auto* ids : {&o.titles, &o.moved}) ids->erase(std::remove(ids->begin(), ids->end(), id), ids->end());
+                }
+            auto& custom = m_settings.customPages[page - kPageCount];
+            if (std::find(custom.titles.begin(), custom.titles.end(), id) == custom.titles.end()) custom.titles.push_back(id);
+            if (move && std::find(custom.moved.begin(), custom.moved.end(), id) == custom.moved.end()) custom.moved.push_back(id);
             m_settings.save();
             rebuildCustomPages();
-            say(trf("{game} added to {page}", {game.name, pageName(page)}));
+            requeueArt();
+            say(trf(move ? "{game} moved to {page}" : "{game} added to {page}", {game.name, pageName(page)}));
         }));
     items.push_back(action("Create a page", [this]() { openCustomPages(); }));
-    openMenu("Add to custom page", std::move(items));
+    openMenu(move ? "Move to custom page" : "Add to custom page", std::move(items));
 }
 
 void CardsActivity::notifyCard(std::string title, std::string message, std::string glyph) {

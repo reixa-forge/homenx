@@ -17,6 +17,10 @@ namespace cards {
 struct CustomPage {
     std::string name;
     std::vector<std::string> titles;
+    // The ones moved here (Settings > Custom pages > Move, not Add): off their
+    // own page while they're here. Always a part of `titles`. When the page
+    // goes (or is hidden) they're back on their own pages, as they were.
+    std::vector<std::string> moved;
 };
 
 // Writes `data` to `path` on CardsNX's writer thread (Library.cpp): the
@@ -84,6 +88,7 @@ struct Settings {
     bool introDone = false;     // the first-time intro was shown
     bool switchuOrder = false;  // SwitchU's own order (its layout.json) taken as My order, once
     bool forwardersOnGames = true; // installed NRO forwarders on the Games page (as the console's HOME and SwitchU)
+    bool customPagesMove = false;  // + puts a game on a custom page by moving it there (off its own page), not a copy
     std::string wallpaper;      // one picture behind everything ("" = each game's art)
     std::map<std::string, std::string> names; // + > Rename: by title ID (hex) or .nro path
     std::vector<std::string> sheetOrder; // Settings' tabs by name, in his order (new ones after)
@@ -120,6 +125,10 @@ struct Settings {
     // here, and the next save wrote them over everything (2026-11-10: HOME out
     // of memory with Spotify playing reset every setting).
     bool readable = false;
+    // The file was there but wasn't settings (cut short, not JSON): it was
+    // put aside as kDamaged and these are the defaults. Said once (CardsActivity).
+    bool startedFresh = false;
+    static constexpr const char* kDamaged = "sdmc:/config/CardsNX/settings.json.bad";
 
     bool pinGameCard() const { return (gameCardDisplay & 1) != 0; }
     bool showGameCardTitle() const { return (gameCardDisplay & 2) != 0; }
@@ -134,27 +143,41 @@ struct Settings {
             normalizePages();
             return;
         }
-        readable = read(kPath, &text);
+        bool damaged = false, backupDamaged = false;
+        readable = read(kPath, &text, &damaged);
         if (readable) {
             writeLater(kBackup, std::move(text));
         } else {
-            readable = read(kBackup, nullptr); // the last good copy
+            readable = read(kBackup, nullptr, &backupDamaged); // the last good copy
             if (!readable) {
                 std::error_code e1, e2;
                 const bool have = std::filesystem::exists(kPath, e1), haveBackup = std::filesystem::exists(kBackup, e2);
                 readable = !e1 && !e2 && !have && !haveBackup; // none at all: a first start, these are its settings
+                // There, but not settings (and no good copy): kept aside, and the
+                // defaults saved from now on. Without this nothing was ever saved
+                // again, silently, until the file was deleted by hand. A read that
+                // failed some other way (out of memory) still saves nothing.
+                if (!readable && !e1 && !e2 && (!have || damaged) && (!haveBackup || backupDamaged) && (have || haveBackup)) {
+                    *this = Settings{};
+                    std::error_code e;
+                    std::filesystem::rename(have ? kPath : kBackup, kDamaged, e);
+                    readable = startedFresh = true;
+                }
             }
         }
         normalizePages();
     }
 
-    bool read(const char* path, std::string* textOut) {
+    bool read(const char* path, std::string* textOut, bool* damaged = nullptr) {
         try {
             std::ifstream in(path, std::ios::binary);
             if (!in) return false;
             std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
             const auto j = nlohmann::json::parse(text);
-            if (!j.is_object()) return false;
+            if (!j.is_object()) {
+                if (damaged) *damaged = true;
+                return false;
+            }
             music = j.value("music", music);
             musicVolume = j.value("musicVolume", musicVolume);
             shuffle = j.value("shuffle", shuffle);
@@ -178,6 +201,11 @@ struct Settings {
                         for (const auto& id : page["titles"])
                             if (id.is_string() && std::find(custom.titles.begin(), custom.titles.end(), id.get<std::string>()) == custom.titles.end())
                                 custom.titles.push_back(id.get<std::string>());
+                    if (page.contains("moved") && page["moved"].is_array())
+                        for (const auto& id : page["moved"])
+                            if (id.is_string() && std::find(custom.titles.begin(), custom.titles.end(), id.get<std::string>()) != custom.titles.end()
+                                && std::find(custom.moved.begin(), custom.moved.end(), id.get<std::string>()) == custom.moved.end())
+                                custom.moved.push_back(id.get<std::string>());
                     customPages.push_back(std::move(custom));
                     if (customPages.size() == kMaxCustomPages) break;
                 }
@@ -221,6 +249,7 @@ struct Settings {
             introDone = j.value("introDone", introDone);
             switchuOrder = j.value("switchuOrder", switchuOrder);
             forwardersOnGames = j.value("forwardersOnGames", forwardersOnGames);
+            customPagesMove = j.value("customPagesMove", customPagesMove);
             wallpaper = j.value("wallpaper", wallpaper);
             names = j.value("names", names);
             sheetOrder = j.value("sheetOrder", sheetOrder);
@@ -233,7 +262,10 @@ struct Settings {
             for (int p = 0; p < 4; ++p) order[p] = j.value(keys[p], order[p]);
             if (textOut) *textOut = std::move(text);
             return true;
-        } catch (...) {
+        } catch (const nlohmann::json::exception&) { // not JSON, or not ours (cut short)
+            if (damaged) *damaged = true;
+            return false;
+        } catch (...) { // (out of memory, say: the file may be fine)
             return false;
         }
     }
@@ -245,12 +277,12 @@ struct Settings {
                             {"motion", motion}, {"bgMotion", bgMotion}, {"gridView", gridView}, {"startPage", startPage}, {"pageOrder", pageOrder},
                             {"sortOrder", sort}, {"haze", haze}, {"boxArt", boxArt}, {"accent", accent},
                             {"glass", glass}, {"launchStyle", launchStyle}, {"clock24", clock24}, {"showFree", showFree}, {"showTemp", showTemp}, {"titlePics", titlePics}, {"mediaIn", mediaIn}, {"mediaOut", mediaOut}, {"gamesIn", gamesIn}, {"gamesOut", gamesOut}, {"fullCards", fullCards}, {"nroHash", nroHash}, {"titles", titles}, {"askUser", askUser}, {"panelApp", panelApp},
-                            {"lockScreen", lockScreen}, {"lockMusic", lockMusic}, {"keepHomebrew", keepHomebrew}, {"hbPath", hbPath}, {"hbHost", hbHost}, {"hiddenCards", hiddenCards}, {"sheetBack", sheetBack}, {"sheetBackRow", sheetBackRow}, {"hiddenPages", hiddenPages}, {"spotify", spotify}, {"picturesAt", picturesAt}, {"achSeenAt", achSeenAt},{"introDone", introDone}, {"switchuOrder", switchuOrder}, {"forwardersOnGames", forwardersOnGames}, {"wallpaper", wallpaper}, {"names", names},
+                            {"lockScreen", lockScreen}, {"lockMusic", lockMusic}, {"keepHomebrew", keepHomebrew}, {"hbPath", hbPath}, {"hbHost", hbHost}, {"hiddenCards", hiddenCards}, {"sheetBack", sheetBack}, {"sheetBackRow", sheetBackRow}, {"hiddenPages", hiddenPages}, {"spotify", spotify}, {"picturesAt", picturesAt}, {"achSeenAt", achSeenAt},{"introDone", introDone}, {"switchuOrder", switchuOrder}, {"forwardersOnGames", forwardersOnGames}, {"customPagesMove", customPagesMove}, {"wallpaper", wallpaper}, {"names", names},
                             {"sheetOrder", sheetOrder}, {"user", user}, {"lastGame", lastGame}, {"listsAt", listsAt}, {"perfLog", perfLog}, {"language", language},
                             {"orderGames", order[0]}, {"orderHomebrew", order[1]}, {"orderNintendo", order[2]},
                             {"orderMedia", order[3]}};
         j["customPages"] = nlohmann::json::array();
-        for (const auto& page : customPages) j["customPages"].push_back({{"name", page.name}, {"titles", page.titles}});
+        for (const auto& page : customPages) j["customPages"].push_back({{"name", page.name}, {"titles", page.titles}, {"moved", page.moved}});
         j["notificationCards"] = notificationCards;
         j["lastPage"] = lastPage;
         j["lockGameBanner"] = lockGameBanner;

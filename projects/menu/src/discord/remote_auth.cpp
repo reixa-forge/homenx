@@ -174,16 +174,33 @@ public:
 
     void Pump() {
         if (listen_ < 0) return;
+        // One client at a time, but one that sends nothing doesn't hold the
+        // page: phone browsers open spare connections ahead (preconnect) and
+        // leave them idle, and the real request waited behind one until the
+        // phone gave up on it. An idle one gives way to the next connection,
+        // and any that's quiet for 5 s is closed.
+        if (client_ >= 0 && buf_.empty()) {
+            int fd = accept(listen_, nullptr, nullptr);
+            if (fd >= 0) {
+                FinishClient();
+                Take(fd);
+            }
+        }
         if (client_ < 0) {
             int fd = accept(listen_, nullptr, nullptr);
             if (fd < 0) return;
-            fcntl(fd, F_SETFL, O_NONBLOCK);
-            client_ = fd;
-            buf_.clear();
+            Take(fd);
+        }
+        if (Now() - clientAt_ > 5000) {
+            FinishClient();
+            return;
         }
         char tmp[2048];
         const ssize_t n = recv(client_, tmp, sizeof(tmp), 0);
-        if (n > 0) buf_.append(tmp, tmp + n);
+        if (n > 0) {
+            buf_.append(tmp, tmp + n);
+            clientAt_ = Now();
+        }
         else if (n == 0) {
             FinishClient();
             return;
@@ -269,6 +286,12 @@ private:
         }
         FinishClient();
     }
+    void Take(int fd) {
+        fcntl(fd, F_SETFL, O_NONBLOCK);
+        client_ = fd;
+        clientAt_ = Now();
+        buf_.clear();
+    }
     void FinishClient() {
         if (client_ >= 0) ::close(client_);
         client_ = -1;
@@ -284,6 +307,7 @@ private:
     int client_ = -1;
     int port_ = 0;
     int64_t started_ = 0;
+    int64_t clientAt_ = 0; // the client's last bytes (or its connecting)
     std::string host_, nonce_, buf_, html_, token_, widgetError_, rqtoken_, sessionId_;
 };
 

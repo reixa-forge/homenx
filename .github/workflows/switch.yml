@@ -130,6 +130,12 @@ jobs:
           g++ -std=c++20 -I projects/common/include tools/test_achievement_packs.cpp -o /tmp/packs_test
           /tmp/packs_test
 
+      - name: Host tests (cards, game card, storage, grid, widgets)
+        run: |
+          apt-get -y install nlohmann-json3-dev zlib1g-dev
+          bash tests/run_cards_personalization.sh
+          python3 tools/check_cards_lang.py
+
       - name: Set xmake env
         run: echo "XMAKE_GLOBALDIR=${{ runner.workspace }}/xmake-global" >> "$GITHUB_ENV"
 

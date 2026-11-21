@@ -156,6 +156,43 @@ int main() {
         assert(ach::progress(milestone, {0, 1}) < 1.f);
     }
 
+    // Custom pages remember which games were moved there (not just added),
+    // and a moved id that isn't on the page is dropped.
+    {
+        fs::remove(cards::Settings::kBackup);
+        std::ofstream(cards::Settings::kPath)
+            << R"({"customPagesMove":true,"customPages":[{"name":"Party","titles":["0100A","0100B"],"moved":["0100A","0100C","0100A"]}]})";
+        cards::Settings moved;
+        moved.load();
+        assert(moved.customPagesMove && moved.customPages.size() == 1);
+        assert((moved.customPages[0].moved == std::vector<std::string>{"0100A"}));
+        moved.customPages[0].moved.push_back("0100B");
+        moved.save();
+        cards::Settings again;
+        again.load();
+        assert((again.customPages[0].moved == std::vector<std::string>{"0100A", "0100B"}) && again.customPagesMove);
+    }
+    // A damaged file with no good copy: put aside, the defaults saved from then
+    // on (it used to save nothing ever again). A good backup is used instead.
+    {
+        fs::remove(cards::Settings::kBackup);
+        fs::remove(cards::Settings::kDamaged);
+        std::ofstream(cards::Settings::kPath, std::ios::trunc) << R"({"music":fa)";
+        cards::Settings damaged;
+        damaged.load();
+        assert(damaged.readable && damaged.startedFresh);
+        assert(fs::exists(cards::Settings::kDamaged) && !fs::exists(cards::Settings::kPath));
+        damaged.musicVolume = 12;
+        damaged.save();
+        cards::Settings fresh;
+        fresh.load();
+        assert(fresh.readable && !fresh.startedFresh && fresh.musicVolume == 12);
+        std::ofstream(cards::Settings::kBackup, std::ios::trunc) << R"({"musicVolume":33})";
+        std::ofstream(cards::Settings::kPath, std::ios::trunc) << "";
+        cards::Settings fromBackup;
+        fromBackup.load();
+        assert(fromBackup.readable && !fromBackup.startedFresh && fromBackup.musicVolume == 33);
+    }
     fs::current_path(original);
     fs::remove_all(temporary);
 }

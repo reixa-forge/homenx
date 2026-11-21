@@ -35,3 +35,13 @@ c++ -std=gnu++20 -Itests/support -Iprojects/cards/src -Iprojects/common/include 
     "${sanitizer_flags[@]}" tests/game_card_test.cpp projects/cards/src/GameCard.cpp \
     -lz -o "$test_dir/game-card-test"
 ASAN_OPTIONS=detect_leaks=0 timeout --kill-after=5s 20s "$test_dir/game-card-test"
+c++ -std=gnu++20 -Iprojects/menu/src -Iprojects/common/include -I"$json_include" \
+    "${sanitizer_flags[@]}" tests/grid_navigation_test.cpp projects/menu/src/widgets/GridNavigation.cpp \
+    -o "$test_dir/grid-test"
+ASAN_OPTIONS=detect_leaks=0 timeout --kill-after=5s 20s "$test_dir/grid-test"
+echo 'Grid navigation tests passed.'
+c++ -std=gnu++20 -Itests/support -Ilib/nxui/include -Iprojects/menu/src -Iprojects/common/include \
+    -I"$json_include" -I"$nx_include" "${sanitizer_flags[@]}" tests/widget_model_test.cpp \
+    projects/menu/src/core/WidgetStore.cpp projects/menu/src/core/WidgetModel.cpp -o "$test_dir/widget-test"
+ASAN_OPTIONS=detect_leaks=0 timeout --kill-after=5s 20s "$test_dir/widget-test"
+echo 'Widget model tests passed.'

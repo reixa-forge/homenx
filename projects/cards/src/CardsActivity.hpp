@@ -37,6 +37,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 namespace cards {
@@ -309,6 +310,8 @@ private:
     void drawGameCard(nxui::Renderer& renderer, float alpha);
     void clearGameCardPresentation();
     void refreshGameCardPresentation();
+    std::unordered_set<std::uint64_t> movedToCustomPages() const; // off their own pages (shown custom pages only)
+    std::vector<Game> m_moveSetAside; // Move on a built-in page: the list as it was, the moved-out games in it
     void openGameCardDisplay();
     void openGameCardIcons();
     std::vector<Game> m_gameCardPages[Settings::kMaxPages];

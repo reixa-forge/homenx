@@ -87,15 +87,21 @@ extern "C" void __libnx_initheap(void) {
     // limit says is free. With the 416 MiB rung taken, Spotify playing left
     // 124 KiB: every picture was refused (the covers went) and HOME over a game
     // couldn't make its first texture (a black screen, 2026-11-10).
+    // (unknown: no ceiling. Known but short, under the headroom itself: only
+    // the smallest rung, the least it can start with — it used to mean no
+    // ceiling at all, so the tightest case took the most.)
+    bool known = false;
     size_t available = 0;
     u64 total = 0, used = 0;
     if (R_SUCCEEDED(svcGetInfo(&total, InfoType_TotalMemorySize, CUR_PROCESS_HANDLE, 0)) &&
-        R_SUCCEEDED(svcGetInfo(&used, InfoType_UsedMemorySize, CUR_PROCESS_HANDLE, 0)) && total > used)
-        available = static_cast<size_t>(total - used);
+        R_SUCCEEDED(svcGetInfo(&used, InfoType_UsedMemorySize, CUR_PROCESS_HANDLE, 0))) {
+        known = true;
+        available = total > used ? static_cast<size_t>(total - used) : 0;
+    }
     constexpr size_t kHeadroom = 64u * 1024u * 1024u;
     const size_t ceiling = available > kHeadroom ? available - kHeadroom : 0;
     for (size_t requested : kHeapLadder) {
-        if (ceiling != 0 && requested > ceiling && requested > kHeapLadder[std::size(kHeapLadder) - 1]) continue;
+        if (known && requested > ceiling && requested > kHeapLadder[std::size(kHeapLadder) - 1]) continue;
         if (R_SUCCEEDED(svcSetHeapSize(&address, requested))) {
             granted = requested;
             break;
