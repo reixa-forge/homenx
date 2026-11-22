@@ -850,6 +850,14 @@ private:
 
     // The background: the chosen game's art, faded in over the last one.
     std::uint64_t m_bgId = 0, m_bgPrevId = 0;
+    // The background on screen: always a real one (the game's own, loaded).
+    // The newly chosen game's comes in over it once it's here; until then the
+    // last one stays (its card stretched, or the card's small copy, stood in
+    // before: a blurry picture, then the right one, at each step scrolling).
+    std::uint64_t m_bgShowId = 0, m_bgFromId = 0;
+    float m_bgShowAt = -10.f;
+    std::uint64_t m_bgWantId = 0; // (the chosen game since m_bgWantAt: one with no background at all lets the old one go after 2 s)
+    float m_bgWantAt = 0.f;
     float m_bgFade = 1.f;
 
     // The status bar (numbers from worker 1: the SD card and network calls

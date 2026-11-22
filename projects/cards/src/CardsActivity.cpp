@@ -1523,31 +1523,9 @@ void CardsActivity::worker(int index) {
             done.small = done.rgba;
             done.sw = done.w;
             done.sh = done.h;
-            shrink(done.small, done.sw, done.sh, 64);
+            shrink(done.small, done.sw, done.sh, 96); // (64 was a blur on a 240-wide card while scrolling)
         };
-        bool cached = !shown.empty() && (decodeLock.lock(), readShown(shown, done.rgba, done.w, done.h, done.kind));
-        // Not kept at this size, but at another (docked / handheld draw them at different sizes):
-        // that one, sized for this. It was fetched again before, and while the internet wasn't up
-        // yet a stand-in showed (an eShop banner), then the real one: the cards changed pictures.
-        if (!cached && !shown.empty() && (job.what == kCard || job.what == kIcon)) {
-            const int base = job.what == kCard ? 300 : 160;
-            const std::string stem = shown.substr(0, shown.rfind('.') + 1);
-            for (const float scale : {1.f, 1.5f, 2.f, 1.25f}) {
-                const int other = static_cast<int>(static_cast<float>(base) * scale);
-                if (other == shownW) continue;
-                if (!decodeLock.owns_lock()) decodeLock.lock();
-                if (!readShown(stem + std::to_string(other), done.rgba, done.w, done.h, done.kind)) continue;
-                if (done.w > shownW) {
-                    int w = done.w, h = done.h;
-                    shrink(done.rgba, w, h, shownW);
-                    done.w = w;
-                    done.h = h;
-                }
-                writeShown(shown, done.rgba, done.w, done.h, done.kind); // (this size's, from now on)
-                cached = true;
-                break;
-            }
-        }
+        const bool cached = !shown.empty() && (decodeLock.lock(), readShown(shown, done.rgba, done.w, done.h, done.kind));
         if (!cached && decodeLock.owns_lock()) decodeLock.unlock(); // (the fetches below run without it)
         if (cached) {
             // (ready as it is; a cover kept before the small copies existed gets its own now)
@@ -1630,15 +1608,6 @@ void CardsActivity::worker(int index) {
                         makeSmall();
                         writeShown(thumbPath(job.game.id), done.small, done.sw, done.sh, done.kind);
                     }
-                } else if (!forGood && job.what == kCard) {
-                    // A stand-in (the internet not there yet) for a card that has its real
-                    // picture's small copy: that stays up, and the real one is asked again
-                    // soon. The stand-in showed, then the real one: two pictures in turn.
-                    std::error_code ec;
-                    if (std::filesystem::exists(thumbPath(job.game.id), ec)) {
-                        done.rgba = {};
-                        done.small = {};
-                    }
                 }
             }
         }
@@ -1702,7 +1671,8 @@ CardsActivity::Admit CardsActivity::reserveArtwork(std::uint64_t bytes, bool sto
         for (auto it = m_art.begin(); it != m_art.end(); ++it) {
             const auto id = it->first;
             const Art& a = it->second;
-            if ((chosen && chosen->id == id) || (m_locked && id == m_lockGameId) || id == m_bgId || id == m_bgPrevId) continue;
+            if ((chosen && chosen->id == id) || (m_locked && id == m_lockGameId) || id == m_bgId || id == m_bgPrevId
+                || id == m_bgShowId || id == m_bgFromId) continue; // (the backgrounds on screen)
             if (!(a.card || a.bg || a.icon || (stockToo && a.stock))) continue;
             if (victim == m_art.end() || a.lastAccess < victim->second.lastAccess) victim = it;
         }
@@ -11084,16 +11054,7 @@ void CardsActivity::drawBackground(nxui::Renderer& r) {
         auto th = m_thumbs.find(id);
         return th != m_thumbs.end() && th->second.tex ? th->second.tex.get() : nullptr;
     };
-    auto drawBg = [&](std::uint64_t id, float alpha, float zoom, float panX, float panY) {
-        const nxui::Rect full{0.f, 0.f, 1280.f, 720.f};
-        const nxui::Texture* real = bgOf(id);
-        const auto it = m_art.find(id);
-        const float sharp = real && it != m_art.end() ? easeOut((m_time - it->second.bgIn) / 0.2f) : 0.f;
-        if (sharp < 1.f)
-            if (const nxui::Texture* stand = standInOf(id))
-                drawCover(r, stand, full, 0.f, kWhite.withAlpha(alpha), 0.f, 0.f, zoom, panX, panY);
-        if (real) drawCover(r, real, full, 0.f, kWhite.withAlpha(alpha * sharp), 0.f, 0.f, zoom, panX, panY);
-    };
+    (void)standInOf; // (the very first one, below, when there's no background at all yet)
     const nxui::Rect screen{0.f, 0.f, 1280.f, 720.f};
     // A slow drift (zoom and pan), so the art feels alive; launching, it leans in.
     const bool motion = m_settings.motion && m_settings.bgMotion && !m_gpuSlow; // (a slow GPU: it stays still)
@@ -11107,8 +11068,29 @@ void CardsActivity::drawBackground(nxui::Renderer& r) {
     if (m_wallTex && m_wallTex->valid()) { // Settings > Look > Background: one picture for everything
         drawCover(r, m_wallTex.get(), screen, 0.f, kWhite, 0.f, 0.f, zoom, panX, panY);
     } else {
-        if (m_bgFade < 1.f) drawBg(m_bgPrevId, 1.f, zoom, panX, panY);
-        drawBg(m_bgId, easeOut(m_bgFade), zoom, panX, panY);
+        // Only real backgrounds: the chosen game's once it's loaded (fading in
+        // over the one before), the one before until then.
+        if (m_bgId != m_bgShowId && bgOf(m_bgId)) {
+            m_bgFromId = bgOf(m_bgShowId) ? m_bgShowId : 0;
+            m_bgShowId = m_bgId;
+            m_bgShowAt = m_time;
+        }
+        if (m_bgWantId != m_bgId) {
+            m_bgWantId = m_bgId;
+            m_bgWantAt = m_time;
+        }
+        const float in = m_settings.motion ? easeOut((m_time - m_bgShowAt) / 0.3f) : 1.f;
+        // The chosen game still without one after 2 s (none to be had): the old one fades away.
+        const float stale = m_bgShowId != m_bgId ? 1.f - easeOut(std::max(0.f, m_time - m_bgWantAt - 2.f) / 0.5f) : 1.f;
+        if (in < 1.f)
+            if (const nxui::Texture* from = bgOf(m_bgFromId))
+                drawCover(r, from, screen, 0.f, kWhite, 0.f, 0.f, zoom, panX, panY);
+        if (const nxui::Texture* shown = bgOf(m_bgShowId)) {
+            drawCover(r, shown, screen, 0.f, kWhite.withAlpha(in * stale), 0.f, 0.f, zoom, panX, panY);
+        } else if (m_bgShowId == 0) { // nothing loaded yet (HOME just started): the chosen card, softly
+            if (const nxui::Texture* stand = standInOf(m_bgId))
+                drawCover(r, stand, screen, 0.f, kWhite.withAlpha(0.5f), 0.f, 0.f, zoom, panX, panY);
+        }
     }
     // The haze over it (Settings > Background softness), and a little depth at the edges.
     const float haze = static_cast<float>(m_settings.haze) / 100.f
@@ -12289,8 +12271,8 @@ void CardsActivity::drawCrossList(nxui::Renderer& r) {
         const auto it = m_art.find(g.id);
         const nxui::Texture* tex = nullptr;
         if (it != m_art.end()) {
+            // (Only its icon: the title picture stood in until it came -- another picture, then the right one.)
             if (it->second.stock && it->second.stock->valid()) tex = it->second.stock.get();
-            else if (it->second.icon && it->second.icon->valid()) tex = it->second.icon.get();
         }
         if (chosen) // a soft glow behind the chosen one
         {

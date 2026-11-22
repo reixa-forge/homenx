@@ -201,7 +201,7 @@ void forgetArt(std::uint64_t id); // the next ask downloads them again
 std::string shownPath(std::uint64_t id, const std::string& what);
 // A game's cover as a very small picture (a few KB): read for every card at
 // once when HOME starts, so no card shows its name instead of its cover.
-inline std::string thumbPath(std::uint64_t id) { return shownPath(id, "t"); }
+inline std::string thumbPath(std::uint64_t id) { return shownPath(id, "t96"); } // (".t": the 64-wide ones before)
 bool readShown(const std::string& path, std::vector<std::uint8_t>& rgba, int& w, int& h, ArtKind& kind);
 void writeShown(const std::string& path, const std::vector<std::uint8_t>& rgba, int w, int h, ArtKind kind);
 void forgetShown(std::uint64_t id); // its picture changed (chosen, downloaded again, a full card)
