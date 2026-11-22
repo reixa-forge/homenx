@@ -99,6 +99,15 @@ struct Settings {
     bool playersMine = false;    // the players list: only games on the console
     bool genrePages = false;     // a page for each genre with 2+ of his games (as custom pages, made and kept up to date)
     int accentR = 100, accentG = 45, accentB = 45; // Highlight colour > Custom (each 0-100%)
+    std::map<std::string, std::string> notes; // + > Note: a line of his own per game (id hex -> text)
+    // Settings > Cross view.
+    int crossSize = 1;            // the list's icons: 0 small, 1 medium, 2 large
+    int crossInfo = 0;            // under the chosen game: 0 play time and last played, 1 play time, 2 last played, 3 nothing
+    int crossBg = 0;              // behind: 0 the game's art, 1 dimmed, 2 dark
+    int crossPos = 0;             // the list: 0 on the left, 1 in the middle
+    bool crossNames = true;       // the categories' names under their icons
+    bool crossSystemCat = true;   // the System category (last)
+    bool crossPlusDetails = true; // + opens the details panel (off: the options, as on the cards)
     std::map<std::string, std::string> names; // + > Rename: by title ID (hex) or .nro path
     std::vector<std::string> sheetOrder; // Settings' tabs by name, in his order (new ones after)
     std::string user;         // who games start as (hex), "" = the last one who played
@@ -266,6 +275,17 @@ struct Settings {
             nextendoAlerts = j.value("nextendoAlerts", nextendoAlerts);
             playersMine = j.value("playersMine", playersMine);
             genrePages = j.value("genrePages", genrePages);
+            if (j.contains("notes") && j["notes"].is_object()) notes.clear();
+            if (j.contains("notes") && j["notes"].is_object())
+                for (auto it = j["notes"].begin(); it != j["notes"].end(); ++it)
+                    if (it.value().is_string()) notes[it.key()] = it.value().get<std::string>();
+            crossSize = std::clamp(j.value("crossSize", crossSize), 0, 2);
+            crossInfo = std::clamp(j.value("crossInfo", crossInfo), 0, 3);
+            crossBg = std::clamp(j.value("crossBg", crossBg), 0, 2);
+            crossPos = std::clamp(j.value("crossPos", crossPos), 0, 1);
+            crossNames = j.value("crossNames", crossNames);
+            crossSystemCat = j.value("crossSystemCat", crossSystemCat);
+            crossPlusDetails = j.value("crossPlusDetails", crossPlusDetails);
             accentR = std::clamp(j.value("accentR", accentR), 0, 100);
             accentG = std::clamp(j.value("accentG", accentG), 0, 100);
             accentB = std::clamp(j.value("accentB", accentB), 0, 100);
@@ -315,6 +335,14 @@ struct Settings {
         j["nextendoAlerts"] = nextendoAlerts;
         j["playersMine"] = playersMine;
         j["genrePages"] = genrePages;
+        j["notes"] = notes;
+        j["crossSize"] = crossSize;
+        j["crossInfo"] = crossInfo;
+        j["crossBg"] = crossBg;
+        j["crossPos"] = crossPos;
+        j["crossNames"] = crossNames;
+        j["crossSystemCat"] = crossSystemCat;
+        j["crossPlusDetails"] = crossPlusDetails;
         j["accentR"] = accentR;
         j["accentG"] = accentG;
         j["accentB"] = accentB;

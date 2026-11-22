@@ -218,6 +218,7 @@ private:
     void setCrossView(bool on);
     bool updateCross(float dt);       // its buttons (false: the bar has them)
     void drawCross(nxui::Renderer& r);
+    void drawCrossList(nxui::Renderer& r);
     bool crossTouch(float x, float y);
     std::vector<int> crossPages() const;  // the pages shown, in your order
     int crossCat() const;                 // the category chosen (crossPages().size(): System)
@@ -229,6 +230,22 @@ private:
     float m_crossCat = 0.f, m_crossRow = 0.f, m_crossSysRow = 0.f; // drawn (they ease to the chosen)
     float m_crossDrawnAt = 0.f, m_crossRepeat = 0.f, m_crossVRepeat = 0.f;
     float m_crossListIn = 1.f;    // the list fading in after the category changed
+    float crossX() const;         // the chosen column's middle (Settings > Cross view > List position)
+    float crossScale() const;     // the list's icons (Settings > Cross view > Icon size)
+    // The details panel (+ in the cross view): the game's art and all that's
+    // known about it, and what can be done with it.
+    bool m_crossInfo = false;
+    float m_crossInfoIn = 0.f;    // its slide (0 out, 1 in)
+    int m_crossInfoSel = 0;
+    struct CrossFacts { std::uint64_t id = 0; int achEarned = 0, achTotal = 0; };
+    CrossFacts m_crossFacts;      // (achievements read from the SD card once per game, not each frame)
+    void openCrossInfo();
+    void crossInfoFacts();
+    std::vector<CrossItem> crossInfoActions();
+    void updateCrossInfo();
+    void drawCrossInfo(nxui::Renderer& r);
+    void editNote(const Game& game);
+    nxui::Color gridCursor(float a) const; // the grid's cursor: the highlight colour (White: SwitchU's blue)
     void drawGrid(nxui::Renderer& r);
     void updateGrid(float dt);
     bool gridMove(int dx, int dy);  // false when the move leaves the grid (up from the top row)
