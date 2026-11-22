@@ -271,26 +271,94 @@ void Audio::opened() {
     Mix_Volume(-1, MIX_MAX_VOLUME * m_soundVolume / 100);
     Mix_HookMusicFinished(onTrackEnded);
     Mix_SetPostMix(onMixed, nullptr);
-    m_infoJob = std::async(std::launch::async, []() {
+    rescan();
+    setMusic(m_music, m_volume); // (as HOME asked meanwhile)
+}
+
+// The songs: /music on the SD card (and the folders in it, 3 deep), then
+// config/CardsNX/music, then HomeNX's own. MP3, OGG and WAV.
+void Audio::rescan() {
+    if (!m_open || m_infoJob.valid()) return;
+    const bool sounds = !m_soundsLoaded;
+    m_infoJob = std::async(std::launch::async, [sounds]() {
         offTheScreensCore();
         Loaded l;
-        std::error_code ec;
-        for (const auto& e : std::filesystem::directory_iterator(std::string(kSounds) + "/music", ec)) {
-            const std::string ext = e.path().extension().string();
-            if (ext == ".mp3" || ext == ".ogg" || ext == ".MP3" || ext == ".OGG") l.tracks.push_back(e.path().string());
+        auto isSong = [](const std::filesystem::path& p) {
+            std::string ext = p.extension().string();
+            for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return ext == ".mp3" || ext == ".ogg" || ext == ".wav";
+        };
+        for (const std::string& dir : {std::string("sdmc:/music"), std::string("sdmc:/config/CardsNX/music"), std::string(kSounds) + "/music"}) {
+            std::error_code ec;
+            std::vector<std::string> found;
+            std::filesystem::recursive_directory_iterator it(dir, ec), end;
+            for (; !ec && it != end; it.increment(ec)) {
+                if (it.depth() >= 3) it.disable_recursion_pending();
+                if (it->is_regular_file(ec) && isSong(it->path())) found.push_back(it->path().string());
+                if (found.size() >= 500) break; // (plenty)
+            }
+            std::sort(found.begin(), found.end());
+            l.tracks.insert(l.tracks.end(), found.begin(), found.end());
         }
-        std::sort(l.tracks.begin(), l.tracks.end());
         for (const std::string& t : l.tracks) {
             const std::string title = id3Title(t);
             l.titles.push_back(title.empty() ? fromFileName(t) : title);
             l.lengths.push_back(mp3Seconds(t));
         }
-        for (const char* name : {"navigation", "activation", "confirm", "launch_game", "show_modal", "hide_modal",
-                                 "tab_transition", "toggle_on", "toggle_off"})
-            l.sounds.emplace_back(name, readAll(std::string(kSounds) + "/sfx/" + name + ".wav"));
+        if (sounds)
+            for (const char* name : {"navigation", "activation", "confirm", "launch_game", "show_modal", "hide_modal",
+                                     "tab_transition", "toggle_on", "toggle_off"})
+                l.sounds.emplace_back(name, readAll(std::string(kSounds) + "/sfx/" + name + ".wav"));
         return l;
     });
-    setMusic(m_music, m_volume); // (as HOME asked meanwhile)
+}
+
+std::string Audio::playingPath() const {
+    return m_playing >= 0 && m_playing < static_cast<long>(m_tracks.size()) ? m_tracks[(size_t)m_playing] : std::string();
+}
+
+void Audio::setPlaylist(std::vector<std::string> off, std::vector<std::string> order) {
+    m_off = std::move(off);
+    m_order = std::move(order);
+    applyPlaylist();
+}
+
+// The songs played: every one found but those turned off, his order first
+// (then the rest as found). What's playing goes on, at its new place; the
+// song being read, too (or, gone, the next one starts).
+void Audio::applyPlaylist() {
+    auto pathAt = [this](long i) { return i >= 0 && i < static_cast<long>(m_tracks.size()) ? m_tracks[(size_t)i] : std::string(); };
+    const std::string now = pathAt(m_playing), want = pathAt(m_wantTrack), job = pathAt(m_jobTrack);
+    std::vector<size_t> keep;
+    for (size_t i = 0; i < m_allTracks.size(); ++i)
+        if (std::find(m_off.begin(), m_off.end(), m_allTracks[i]) == m_off.end()) keep.push_back(i);
+    auto rank = [this](const std::string& path) {
+        const auto it = std::find(m_order.begin(), m_order.end(), path);
+        return it == m_order.end() ? m_order.size() : static_cast<size_t>(it - m_order.begin());
+    };
+    std::stable_sort(keep.begin(), keep.end(), [&](size_t a, size_t b) { return rank(m_allTracks[a]) < rank(m_allTracks[b]); });
+    m_tracks.clear();
+    m_titles.clear();
+    m_lengths.clear();
+    for (size_t i : keep) {
+        m_tracks.push_back(m_allTracks[i]);
+        m_titles.push_back(m_allTitles[i]);
+        m_lengths.push_back(i < m_allLengths.size() ? m_allLengths[i] : 0.f);
+    }
+    auto indexOf = [this](const std::string& path) -> long {
+        if (path.empty()) return -1;
+        for (size_t i = 0; i < m_tracks.size(); ++i)
+            if (m_tracks[i] == path) return static_cast<long>(i);
+        return -1;
+    };
+    m_playing = indexOf(now);
+    const long wantWas = m_wantTrack;
+    m_wantTrack = indexOf(want);
+    m_jobTrack = indexOf(job);
+    if (wantWas >= 0 && m_wantTrack < 0) g_trackEnded = true; // (the one coming was turned off: the next)
+    if (m_tracks.empty()) m_track = 0;
+    else if (m_playing >= 0) m_track = static_cast<size_t>(m_playing) + 1;
+    else m_track %= m_tracks.size();
 }
 
 void Audio::stop() {
@@ -398,9 +466,13 @@ void Audio::update() {
     if (m_infoJob.valid()) { // the songs and sounds are read
         if (m_infoJob.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
         Loaded l = m_infoJob.get();
-        m_tracks = std::move(l.tracks);
-        m_titles = std::move(l.titles);
-        m_lengths = std::move(l.lengths);
+        const bool hadNone = m_tracks.empty();
+        m_allTracks = std::move(l.tracks);
+        m_allTitles = std::move(l.titles);
+        m_allLengths = std::move(l.lengths);
+        applyPlaylist();
+        if (m_soundsLoaded && hadNone && !m_tracks.empty()) g_trackEnded = true; // (a rescan found the first songs: one starts)
+        if (!l.sounds.empty()) m_soundsLoaded = true;
         for (auto& [name, bytes] : l.sounds)
             if (!bytes.empty())
                 if (SDL_RWops* rw = SDL_RWFromConstMem(bytes.data(), static_cast<int>(bytes.size())))

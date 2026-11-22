@@ -253,6 +253,7 @@ private:
     std::map<std::uint64_t, GameInfo> m_infos, m_infosIn;
     void wantInfo(std::uint64_t id);      // asked first (the panel is open on it)
     int m_crossInfoScroll = 0;            // the description's first line shown
+    float m_barLift = 0.f;                // the top bar moved up by (the details panel: off the screen)
     // Custom icons: + > Icon picture, and the cross view's categories.
     bool m_pickIconMode = false, m_pickIconMine = false, m_pickSaveIcon = false;
     std::string m_pickIconKey, m_pickSaveIconKey;
@@ -261,6 +262,8 @@ private:
     std::unordered_set<std::string> m_customIconNone;
     const nxui::Texture* customIcon(const std::string& key); // (read once; "" none)
     void openCategoryIcons();
+    void openMusicManager(int chosen = 0); // Settings > Sound > Your music
+    void openSongMenu(const std::string& path, int at);
     nxui::Color gridCursor(float a) const; // the grid's cursor: the highlight colour (White: SwitchU's blue)
     void drawGrid(nxui::Renderer& r);
     void updateGrid(float dt);

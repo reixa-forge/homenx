@@ -39,6 +39,15 @@ public:
     static constexpr int kBands = 48;
     void spectrum(float* out) const;
     void playTrack(size_t index);
+    // His music: read from /music on the SD card (folders inside too), and
+    // config/CardsNX/music and HomeNX's own; some turned off, some in his order
+    // (Settings > Sound > Your music). All of it, on or off:
+    const std::vector<std::string>& allTracks() const { return m_allTracks; }
+    const std::vector<std::string>& allTitles() const { return m_allTitles; }
+    void setPlaylist(std::vector<std::string> off, std::vector<std::string> order); // (paths)
+    void rescan();                      // new songs put on the SD card: found, no restart
+    bool scanning() const { return m_infoJob.valid(); }
+    std::string playingPath() const;
     // "audio: device paused/woken" once since the last call ("" = nothing).
     std::string takeNote() {
         std::string n;
@@ -62,8 +71,13 @@ private:
 
     bool m_open = false, m_sounds = true, m_music = true, m_shuffle = false, m_repeat = false;
     int m_volume = 60, m_soundVolume = 80;
-    std::vector<std::string> m_tracks, m_titles;
+    std::vector<std::string> m_tracks, m_titles;   // the ones played (on, in order)
     std::vector<float> m_lengths;  // seconds, 0 = not known
+    std::vector<std::string> m_allTracks, m_allTitles; // every song found
+    std::vector<float> m_allLengths;
+    std::vector<std::string> m_off, m_order;        // (setPlaylist)
+    bool m_soundsLoaded = false;
+    void applyPlaylist();                           // m_all* -> the ones played
     float m_position = 0.f;
     unsigned long long m_lastTick = 0;
     size_t m_track = 0;   // the next one

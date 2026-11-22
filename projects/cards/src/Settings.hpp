@@ -36,7 +36,7 @@ void flushWrites(); // everything written (before HOME closes)
 // sdmc:/config/CardsNX/settings.json.
 struct Settings {
     static constexpr int kBuiltinPages = 4;
-    static constexpr int kMaxCustomPages = 8;
+    static constexpr int kMaxCustomPages = 20; // (8 before the genre pages: every genre gets one)
     static constexpr int kMaxPages = kBuiltinPages + kMaxCustomPages;
     std::vector<CustomPage> customPages;
     bool notificationCards = true;
@@ -114,6 +114,7 @@ struct Settings {
     bool gridPill = true;         // the chosen game's name under the grid
     bool gridDots = true;         // the page dots
     bool gridStars = true;        // favourites' stars on the tiles
+    std::vector<std::string> musicOff, musicOrder; // Settings > Sound > Your music (song paths)
     std::map<std::string, std::string> names; // + > Rename: by title ID (hex) or .nro path
     std::vector<std::string> sheetOrder; // Settings' tabs by name, in his order (new ones after)
     std::string user;         // who games start as (hex), "" = the last one who played
@@ -297,6 +298,8 @@ struct Settings {
             gridPill = j.value("gridPill", gridPill);
             gridDots = j.value("gridDots", gridDots);
             gridStars = j.value("gridStars", gridStars);
+            musicOff = j.value("musicOff", musicOff);
+            musicOrder = j.value("musicOrder", musicOrder);
             accentR = std::clamp(j.value("accentR", accentR), 0, 100);
             accentG = std::clamp(j.value("accentG", accentG), 0, 100);
             accentB = std::clamp(j.value("accentB", accentB), 0, 100);
@@ -359,6 +362,8 @@ struct Settings {
         j["gridPill"] = gridPill;
         j["gridDots"] = gridDots;
         j["gridStars"] = gridStars;
+        j["musicOff"] = musicOff;
+        j["musicOrder"] = musicOrder;
         j["accentR"] = accentR;
         j["accentG"] = accentG;
         j["accentB"] = accentB;

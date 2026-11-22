@@ -1525,7 +1525,29 @@ void CardsActivity::worker(int index) {
             done.sh = done.h;
             shrink(done.small, done.sw, done.sh, 64);
         };
-        const bool cached = !shown.empty() && (decodeLock.lock(), readShown(shown, done.rgba, done.w, done.h, done.kind));
+        bool cached = !shown.empty() && (decodeLock.lock(), readShown(shown, done.rgba, done.w, done.h, done.kind));
+        // Not kept at this size, but at another (docked / handheld draw them at different sizes):
+        // that one, sized for this. It was fetched again before, and while the internet wasn't up
+        // yet a stand-in showed (an eShop banner), then the real one: the cards changed pictures.
+        if (!cached && !shown.empty() && (job.what == kCard || job.what == kIcon)) {
+            const int base = job.what == kCard ? 300 : 160;
+            const std::string stem = shown.substr(0, shown.rfind('.') + 1);
+            for (const float scale : {1.f, 1.5f, 2.f, 1.25f}) {
+                const int other = static_cast<int>(static_cast<float>(base) * scale);
+                if (other == shownW) continue;
+                if (!decodeLock.owns_lock()) decodeLock.lock();
+                if (!readShown(stem + std::to_string(other), done.rgba, done.w, done.h, done.kind)) continue;
+                if (done.w > shownW) {
+                    int w = done.w, h = done.h;
+                    shrink(done.rgba, w, h, shownW);
+                    done.w = w;
+                    done.h = h;
+                }
+                writeShown(shown, done.rgba, done.w, done.h, done.kind); // (this size's, from now on)
+                cached = true;
+                break;
+            }
+        }
         if (!cached && decodeLock.owns_lock()) decodeLock.unlock(); // (the fetches below run without it)
         if (cached) {
             // (ready as it is; a cover kept before the small copies existed gets its own now)
@@ -1607,6 +1629,15 @@ void CardsActivity::worker(int index) {
                     if (job.what == kCard) {
                         makeSmall();
                         writeShown(thumbPath(job.game.id), done.small, done.sw, done.sh, done.kind);
+                    }
+                } else if (!forGood && job.what == kCard) {
+                    // A stand-in (the internet not there yet) for a card that has its real
+                    // picture's small copy: that stays up, and the real one is asked again
+                    // soon. The stand-in showed, then the real one: two pictures in turn.
+                    std::error_code ec;
+                    if (std::filesystem::exists(thumbPath(job.game.id), ec)) {
+                        done.rgba = {};
+                        done.small = {};
                     }
                 }
             }
@@ -4520,7 +4551,7 @@ void CardsActivity::openOptions() {
         items.back().glyph = "dots";
     }
     if (g.id && g.action != "get") {
-        items.push_back(action(isFavourite(g.id) ? "Remove from favourites" : "Add to favourites",
+        items.push_back(action(isFavourite(g.id) ? "Unfavourite" : "Favourite",
                                [this, g]() { toggleFavourite(g); }));
         items.back().glyph = "star";
         items.push_back(action("Note", [this, g]() { editNote(g); }));
@@ -7024,7 +7055,7 @@ void CardsActivity::buildSettings() {
                 say("Genre pages are on: they appear as each game's genre is found.");
             }
             syncGenrePages();
-        }, "A page for each genre you have 2 or more games of (Action, RPG...), kept up to date. Up to 6, next to your own pages"));
+        }, "A page for each genre of your games (Action, RPG...), kept up to date, next to your own pages"));
     home.rows.push_back(choice("Sort games", [this]() { return std::string(kSortNames[m_settings.sort]); },
         [this, save](int d) {
             int at = 0;
@@ -7235,13 +7266,6 @@ void CardsActivity::buildSettings() {
         wantArt();
         save();
     }, "Columns and rows of icons on each page"));
-    gridTab.rows.push_back(choice("Cursor colour", [this]() {
-        static const char* const names[] = {"Highlight colour", "SwitchU blue", "Always the highlight colour"};
-        return std::string(names[std::clamp(m_settings.gridCursorColour, 0, 2)]);
-    }, [this, save](int d) {
-        m_settings.gridCursorColour = (m_settings.gridCursorColour + d + 3) % 3;
-        save();
-    }, "Highlight colour: SwitchU's blue while the highlight is White"));
     gridTab.rows.push_back(toggle("Game name", [this]() { return m_settings.gridPill; },
         [this, save]() { m_settings.gridPill = !m_settings.gridPill; save(); }, "The chosen game's name under the grid"));
     gridTab.rows.push_back(toggle("Page dots", [this]() { return m_settings.gridDots; },
@@ -7336,6 +7360,16 @@ void CardsActivity::buildSettings() {
         m_audio.setMusic(homeMusic(), m_settings.musicVolume);
         save();
     }, "HomeNX's HOME music"));
+    sound.rows.push_back(action("Your music", [this]() { m_sheetOpen = false; openMusicManager(); }));
+    sound.rows.back().value = [this]() {
+        return trf("{n} songs", {std::to_string(m_audio.allTracks().size() - std::min(m_audio.allTracks().size(), m_settings.musicOff.size()))});
+    };
+    sound.rows.back().detail = "Put MP3, OGG or WAV files in the music folder on the SD card (folders inside are fine)";
+    sound.rows.push_back(action("Look for new music", [this]() {
+        m_audio.rescan();
+        say("Looking in the music folder for new songs...");
+    }));
+    sound.rows.back().detail = "After copying songs to the SD card: no restart needed";
     sound.rows.push_back(slider("Music volume", [this]() { return m_settings.musicVolume; }, [this, save](int v) {
         m_settings.musicVolume = v;
         m_audio.setMusic(homeMusic(), v);
@@ -9842,6 +9876,7 @@ void CardsActivity::onUpdate(float dt) {
                 m_audio.setSounds(m_settings.sounds, m_settings.soundVolume);
                 m_audio.setShuffle(m_settings.shuffle);
                 m_audio.setRepeat(m_settings.repeat);
+                m_audio.setPlaylist(m_settings.musicOff, m_settings.musicOrder);
                 m_audio.setMusic(homeMusic(), m_settings.musicVolume);
                 startStep("audio asked for");
             }
@@ -10909,7 +10944,11 @@ void CardsActivity::draw(nxui::Renderer& r) {
     // Launching: the bar and the panel go first.
     const int leaveStyle = launchStyle();
     const float ui = m_leaving && leaveStyle != kNoAnimation && leaveStyle != kFade ? 1.f - easeOut(m_leaveT / 0.3f) : 1.f;
-    drawTopBar(r, easeOut(m_intro * 2.2f) * ui);
+    { // The details panel open: the bar slides up off the screen (and back down as it closes).
+        const float t = std::clamp(m_crossInfoIn, 0.f, 1.f), lift = t * t * (3.f - 2.f * t);
+        m_barLift = 140.f * lift;
+    }
+    drawTopBar(r, easeOut(m_intro * 2.2f) * ui * (m_barLift >= 139.f ? 0.f : 1.f));
     drawGameCard(r, easeOut(m_intro * 2.2f) * ui);
     drawStep("draw: the panel");
     if (!m_settings.xmbView) drawPanel(r, easeOut((m_intro - 0.25f) * 2.f) * ui * (1.f - easeOut(m_gridIn)));
@@ -11082,7 +11121,7 @@ void CardsActivity::drawBackground(nxui::Renderer& r) {
 void CardsActivity::drawTopBar(nxui::Renderer& r, float a) {
     if (a <= 0.001f) return;
     const bool top = m_zone == Zone::Top && !m_moving;
-    const float y = kTopY - 18.f * (1.f - a);
+    const float y = kTopY - 18.f * (1.f - a) - m_barLift; // (m_barLift: up off the screen for the details panel)
     const float ring = 0.8f + 0.2f * std::sin(m_decoTime * 5.f);
     auto pressedOf = [this](int index) {
         return m_pressZone == 0 && m_pressIndex == index ? std::sin(clamp01(m_pressT) * 3.14159f) : 0.f;
@@ -11350,9 +11389,9 @@ void CardsActivity::eraseCustomPage(int page) {
     else if (m_page > page) --m_page;
 }
 
-// Genre pages: one for each genre with 2 or more of his games (the Games
-// page's, by nlib.cc's genres), biggest first, as many as there's room for
-// next to his own pages (8 in all; 6 genres at most). Off: all taken away.
+// Genre pages: one for each genre of his games (the Games page's, by
+// nlib.cc's genres), biggest first, as many as there's room for next to his
+// own pages (20 in all). Off: all taken away.
 void CardsActivity::syncGenrePages() {
     std::vector<std::pair<std::string, std::vector<std::string>>> want;
     if (m_settings.genrePages) {
@@ -11362,12 +11401,11 @@ void CardsActivity::syncGenrePages() {
             const auto it = m_genres.find(g.id);
             if (it != m_genres.end() && !it->second.empty()) by[it->second].push_back(idText(g.id));
         }
-        for (auto& [name, ids] : by)
-            if (ids.size() >= 2) want.emplace_back(name, std::move(ids));
+        for (auto& [name, ids] : by) want.emplace_back(name, std::move(ids)); // (every genre, one game or more)
         std::stable_sort(want.begin(), want.end(), [](const auto& a, const auto& b) { return a.second.size() > b.second.size(); });
         int own = 0;
         for (const CustomPage& p : m_settings.customPages) own += p.genre ? 0 : 1;
-        const int room = std::min(6, static_cast<int>(Settings::kMaxCustomPages) - own);
+        const int room = static_cast<int>(Settings::kMaxCustomPages) - own; // (his own pages first)
         if (static_cast<int>(want.size()) > room) want.resize(static_cast<size_t>(std::max(0, room)));
     }
     bool changed = false;
@@ -11567,7 +11605,7 @@ std::vector<CardsActivity::CrossItem> CardsActivity::crossInfoActions() {
         play();
     }});
     if (g.id && g.action != "get")
-        items.push_back({isFavourite(g.id) ? "Remove from favourites" : "Add to favourites", "star", nullptr,
+        items.push_back({isFavourite(g.id) ? "Unfavourite" : "Favourite", "star", nullptr,
                          [this, g]() { toggleFavourite(g); }});
     if (g.id) items.push_back({"Note", "tag", nullptr, [this, g]() { editNote(g); }});
     if (!g.homebrew && g.action.empty())
@@ -11822,6 +11860,125 @@ void CardsActivity::openCategoryIcons() {
     row(tr("System"), "system");
     items.push_back(action("Back", [] {}));
     openMenu("Category icons", std::move(items));
+}
+
+// Settings > Sound > Your music: every song found, on or off, in the order
+// they play; one chosen: play it, turn it off or on, move it, delete it.
+void CardsActivity::openMusicManager(int chosen) {
+    const auto& all = m_audio.allTracks();
+    const auto& titles = m_audio.allTitles();
+    if (all.empty()) {
+        openMenu("Your music", {info("No songs yet. Put MP3, OGG or WAV files in the music folder on the SD card, then Look for new music.",
+                                     []() { return std::string(); }),
+                                action("Look for new music", [this]() {
+                                    m_audio.rescan();
+                                    say("Looking in the music folder for new songs...");
+                                }),
+                                action("Back", [] {})});
+        return;
+    }
+    // In the order they play: his order first, then as found (as Audio does).
+    std::vector<size_t> list(all.size());
+    for (size_t i = 0; i < list.size(); ++i) list[i] = i;
+    auto rank = [this](const std::string& path) {
+        const auto& order = m_settings.musicOrder;
+        const auto it = std::find(order.begin(), order.end(), path);
+        return it == order.end() ? order.size() : static_cast<size_t>(it - order.begin());
+    };
+    std::stable_sort(list.begin(), list.end(), [&](size_t a, size_t b) { return rank(all[a]) < rank(all[b]); });
+    const std::string playing = m_audio.playingPath();
+    std::vector<MenuItem> items;
+    for (size_t k = 0; k < list.size(); ++k) {
+        const std::string path = all[list[k]];
+        const std::string title = list[k] < titles.size() ? titles[list[k]] : path;
+        const int at = static_cast<int>(k);
+        items.push_back(action(title, [this, path, at]() { openSongMenu(path, at); }));
+        items.back().glyph = path == playing ? "play" : "music";
+        items.back().value = [this, path]() {
+            const auto& off = m_settings.musicOff;
+            return tr(std::find(off.begin(), off.end(), path) != off.end() ? "Off" : "On");
+        };
+    }
+    items.push_back(action("Back", [] {}));
+    openMenu(trf("Your music · {n}", {std::to_string(all.size())}), std::move(items));
+    m_menuSel = std::clamp(chosen, 0, static_cast<int>(m_menu.size()) - 1);
+}
+
+void CardsActivity::openSongMenu(const std::string& path, int at) {
+    auto apply = [this]() {
+        m_audio.setPlaylist(m_settings.musicOff, m_settings.musicOrder);
+        m_settings.save();
+    };
+    // His order: every song as it plays now, then this one moved.
+    auto move = [this, apply, path, at](int by) {
+        const auto& all = m_audio.allTracks();
+        std::vector<std::string> order(all.begin(), all.end());
+        auto rank = [this](const std::string& p) {
+            const auto& o = m_settings.musicOrder;
+            const auto it = std::find(o.begin(), o.end(), p);
+            return it == o.end() ? o.size() : static_cast<size_t>(it - o.begin());
+        };
+        std::stable_sort(order.begin(), order.end(), [&](const std::string& a, const std::string& b) { return rank(a) < rank(b); });
+        const auto it = std::find(order.begin(), order.end(), path);
+        if (it == order.end()) return;
+        const int from = static_cast<int>(it - order.begin());
+        const int to = std::clamp(from + by, 0, static_cast<int>(order.size()) - 1);
+        if (to == from) return;
+        std::string song = order[(size_t)from];
+        order.erase(order.begin() + from);
+        order.insert(order.begin() + to, song);
+        m_settings.musicOrder = order;
+        apply();
+        openMusicManager(at + (to - from));
+    };
+    const auto& off = m_settings.musicOff;
+    const bool isOff = std::find(off.begin(), off.end(), path) != off.end();
+    std::vector<MenuItem> items;
+    if (!isOff)
+        items.push_back(action("Play now", [this, path]() {
+            m_audio.setMusic(true, m_settings.musicVolume);
+            // Its place among the songs played (on, in order).
+            const auto& all = m_audio.allTracks();
+            std::vector<std::string> on;
+            for (const std::string& p : all)
+                if (std::find(m_settings.musicOff.begin(), m_settings.musicOff.end(), p) == m_settings.musicOff.end()) on.push_back(p);
+            auto rank = [this](const std::string& p) {
+                const auto& o = m_settings.musicOrder;
+                const auto it = std::find(o.begin(), o.end(), p);
+                return it == o.end() ? o.size() : static_cast<size_t>(it - o.begin());
+            };
+            std::stable_sort(on.begin(), on.end(), [&](const std::string& a, const std::string& b) { return rank(a) < rank(b); });
+            const auto it = std::find(on.begin(), on.end(), path);
+            if (it != on.end()) m_audio.playTrack(static_cast<size_t>(it - on.begin()));
+        }));
+    items.push_back(action(isOff ? "Turn on" : "Turn off", [this, apply, path, at, isOff]() {
+        auto& list = m_settings.musicOff;
+        if (isOff) list.erase(std::remove(list.begin(), list.end(), path), list.end());
+        else list.push_back(path);
+        apply();
+        openMusicManager(at);
+    }));
+    items.push_back(action("Move up", [move]() { move(-1); }));
+    items.push_back(action("Move down", [move]() { move(1); }));
+    items.push_back(action("Delete from the SD card", [this, apply, path, at]() {
+        openMenu("Delete this song from the SD card? It can't be undone.",
+                 {action("Delete", [this, apply, path, at]() {
+                      if (m_audio.playingPath() == path) m_audio.skip(1);
+                      std::error_code ec;
+                      std::filesystem::remove(path, ec);
+                      auto& off = m_settings.musicOff;
+                      off.erase(std::remove(off.begin(), off.end(), path), off.end());
+                      auto& order = m_settings.musicOrder;
+                      order.erase(std::remove(order.begin(), order.end(), path), order.end());
+                      m_settings.save();
+                      m_audio.rescan();
+                      say(ec ? "The song couldn't be deleted." : "Deleted.");
+                  }, true),
+                  action("Cancel", [this, at]() { openMusicManager(at); })});
+    }));
+    items.push_back(action("Back", [this, at]() { openMusicManager(at); }));
+    const std::string name = std::filesystem::path(path).filename().string();
+    openMenu(name, std::move(items));
 }
 
 // Y: the cards, the grid, the cross view, and round again.
@@ -12181,10 +12338,6 @@ void CardsActivity::drawCrossList(nxui::Renderer& r) {
             ax += 20.f + measured(m_fBody, tr("Open now")).x + 22.f;
         }
         if (!about.empty()) textMid(r, m_fBody, fit(m_fBody, about, 1240.f - ax), ax, y + 20.f, kMuted.withAlpha(a));
-    }
-    if (sel() > 1) { // more above, out of sight
-        const std::string more = trf("{n} more", {std::to_string(sel() - 1)});
-        textMid(r, m_fBadge, more, kCrossX + 84.f, kCrossCatY + 96.f, kMuted.withAlpha(listA * 0.7f));
     }
 }
 
