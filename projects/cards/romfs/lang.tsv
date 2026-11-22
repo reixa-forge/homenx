@@ -776,3 +776,18 @@ Homebrew Menu	Menú Homebrew	Menu Homebrew	Меню Homebrew	Menu Homebrew 	Home
 Online Players	Jugadores en línea	Jogadores online	Игроки онлайн	Joueurs en ligne	Spieler online	Giocatori online	オンラインの人数順	在线玩家	Çevrimiçi Oyuncular
 Genre	Género	Gênero	Жанр	Genre	Genre	Genere	ジャンル順	类型	Tür
 Sorted by {s}	Ordenado por: {s}	Ordenado por: {s}	Сортировка: {s}	Trié par : {s}	Sortiert nach: {s}	Ordinato per: {s}	並び順: {s}	排序方式：{s}	Sıralama: {s}
+Search games	Buscar juegos	Buscar jogos	Поиск игр	Rechercher des jeux	Spiele suchen	Cerca giochi	ゲームを検索	搜索游戏	Oyun ara
+Search	Buscar	Buscar	Поиск	Rechercher	Suchen	Cerca	検索	搜索	Ara
+No game called "{words}".	Ningún juego se llama "{words}".	Nenhum jogo se chama "{words}".	Нет игры «{words}».	Aucun jeu nommé « {words} ».	Kein Spiel namens „{words}".	Nessun gioco chiamato "{words}".	「{words}」というゲームはありません。	没有名为"{words}"的游戏。	"{words}" adlı oyun yok.
+{n} games	{n} juegos	{n} jogos	Игр: {n}	{n} jeux	{n} Spiele	{n} giochi	{n}本のゲーム	{n} 个游戏	{n} oyun
+Add to favourites	Añadir a favoritos	Adicionar aos favoritos	В избранное	Ajouter aux favoris	Zu Favoriten	Aggiungi ai preferiti	お気に入りに追加	加入收藏	Favorilere ekle
+Remove from favourites	Quitar de favoritos	Remover dos favoritos	Убрать из избранного	Retirer des favoris	Aus Favoriten entfernen	Rimuovi dai preferiti	お気に入りから外す	取消收藏	Favorilerden çıkar
+{game} isn't a favourite now.	{game} ya no es favorito.	{game} não é mais favorito.	{game} больше не в избранном.	{game} n'est plus un favori.	{game} ist kein Favorit mehr.	{game} non è più tra i preferiti.	{game}をお気に入りから外しました。	{game} 已取消收藏。	{game} artık favori değil.
+{game} is a favourite: first on the Games page.	{game} es favorito: primero en Juegos.	{game} é favorito: primeiro em Jogos.	{game} в избранном: первым на странице игр.	{game} est un favori : en premier dans Jeux.	{game} ist ein Favorit: zuerst bei den Spielen.	{game} è tra i preferiti: primo nella pagina Giochi.	{game}をお気に入りにしました（ゲームの先頭）。	{game} 已收藏：在游戏页最前。	{game} favori: Oyunlar sayfasında ilk sırada.
+Only my games	Solo mis juegos	Só meus jogos	Только мои игры	Seulement mes jeux	Nur meine Spiele	Solo i miei giochi	自分のゲームだけ	仅我的游戏	Yalnızca oyunlarım
+Tell me when people come online	Avisarme cuando haya gente en línea	Avisar quando alguém ficar online	Сообщать, когда появляются игроки	Me prévenir quand des joueurs arrivent	Melden, wenn Leute online kommen	Avvisami quando qualcuno è online	誰かがオンラインになったら知らせる	有人上线时通知我	Biri çevrimiçi olunca haber ver
+Nobody's playing your games right now.	Nadie juega a tus juegos ahora.	Ninguém está jogando seus jogos agora.	Сейчас никто не играет в ваши игры.	Personne ne joue à vos jeux en ce moment.	Gerade spielt niemand deine Spiele.	Nessuno sta giocando ai tuoi giochi ora.	今あなたのゲームを遊んでいる人はいません。	现在没有人在玩你的游戏。	Şu anda kimse oyunlarını oynamıyor.
+On	Activado	Ligado	Вкл.	Activé	An	Attivato	オン	开启	Açık
+{n} player online now	{n} jugador en línea	{n} jogador online	Сейчас онлайн: {n}	{n} joueur en ligne	{n} Spieler online	{n} giocatore online	{n}人がオンライン	{n} 名玩家在线	{n} oyuncu çevrimiçi
+{n} players online now	{n} jugadores en línea	{n} jogadores online	Сейчас онлайн: {n}	{n} joueurs en ligne	{n} Spieler online	{n} giocatori online	{n}人がオンライン	{n} 名玩家在线	{n} oyuncu çevrimiçi
+{n} of your games have players	{n} de tus juegos tienen jugadores	{n} dos seus jogos têm jogadores	В {n} ваших играх есть игроки	{n} de vos jeux ont des joueurs	{n} deiner Spiele haben Spieler	{n} dei tuoi giochi hanno giocatori	あなたのゲーム{n}本にプレイヤーがいます	你的 {n} 个游戏有人在玩	{n} oyununda oyuncu var

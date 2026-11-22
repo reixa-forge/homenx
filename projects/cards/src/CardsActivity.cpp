@@ -658,7 +658,7 @@ bool CardsActivity::onCreate() {
         for (const char* name : {"dots", "sort", "friends", "bell", "gear", "thermo", "tag", "play", "copy", "home",
                                  "power", "music", "news", "discord", "arrows", "wifi", "airplane",
                                  "sun", "speaker", "prev", "next", "pause", "repeat", "shuffle", "playlist",
-                                 "moon", "restart", "hekate", "download", "trash", "pad", "nextendo", "bluetooth", "trophy"}) {
+                                 "moon", "restart", "hekate", "download", "trash", "pad", "nextendo", "bluetooth", "trophy", "star", "search"}) {
             std::ifstream in(std::string(kAssets) + "icons/" + name + ".png", std::ios::binary | std::ios::ate);
             if (!in) continue;
             const auto length = in.tellg();
@@ -1358,6 +1358,7 @@ void CardsActivity::worker(int index) {
                 m_playersIn = std::move(counts);
                 m_nextendoIn = std::move(games);
                 m_playersFresh = true;
+                m_playersLive = true;
             } else {
                 countsAt = now + 30000; // (no answer: again soon, not in 3 minutes)
             }
@@ -1735,6 +1736,7 @@ void CardsActivity::takeArt() {
     std::vector<Done> done;
     bool roomFreed = false;
     bool resortLater = false; // (new counts or genres for the sort chosen: after the lock)
+    bool alertsLater = false;  // (live counts: any of his games just came online? notifyCard locks m_mu)
     {
         std::lock_guard<std::mutex> lk(m_mu);
         const size_t n = std::min<size_t>(8, m_done.size()); // up to 8 a frame, 4 ms at most (below); 3 kept a page of grid icons waiting
@@ -1755,6 +1757,8 @@ void CardsActivity::takeArt() {
                 for (const auto& p : m_players) m_playersTotal += p.second;
             }
             if (m_settings.sort == 4) resortLater = true;
+            alertsLater = m_playersLive;
+            m_playersLive = false;
         }
         if (m_genresFresh) {
             for (auto& [id, g] : m_genresIn) m_genres[id] = std::move(g);
@@ -1788,6 +1792,7 @@ void CardsActivity::takeArt() {
     // Sorted by online players or genre: again with the new numbers (the game
     // chosen stays chosen). Not while a game is being moved.
     if (resortLater && !m_moving && (m_settings.sort == 4 || m_settings.sort == 5)) sortGames(m_settings.sort);
+    if (alertsLater) checkNextendoAlerts();
     const Game* cur = current();
     const std::uint64_t selected = cur ? cur->id : 0;
     const std::uint64_t until = armGetSystemTick() + armNsToTicks(4'000'000ULL);
@@ -2182,6 +2187,8 @@ void CardsActivity::sortGames(int sort, bool keepChoice, bool requeue) {
             }
         });
     }
+    // Favourites first, whatever the sort (in its order among themselves).
+    std::stable_partition(page.begin(), page.end(), [this](const Game& g) { return isFavourite(g.id); });
     m_sels[kGames] = 0;
     for (size_t i = 0; keepChoice && i < page.size(); ++i)
         if (page[i].id == keep) m_sels[kGames] = static_cast<int>(i);
@@ -2196,6 +2203,127 @@ int CardsActivity::onlineOf(const Game& game) const {
     for (const NextendoGame& g : m_nextendoGames) // (one lobby for several titles: Scarlet and Violet)
         if (std::find(g.titles.begin(), g.titles.end(), game.id) != g.titles.end()) n = std::max(n, g.players);
     return n;
+}
+
+bool CardsActivity::isFavourite(std::uint64_t id) {
+    if (!id) return false;
+    if (m_favDirty) {
+        m_favIds.clear();
+        for (const std::string& hex : m_settings.favourites) m_favIds.insert(std::strtoull(hex.c_str(), nullptr, 16));
+        m_favDirty = false;
+    }
+    return m_favIds.count(id) > 0;
+}
+
+void CardsActivity::toggleFavourite(const Game& game) {
+    if (!game.id) return;
+    auto& list = m_settings.favourites;
+    const std::string hex = idText(game.id);
+    const bool was = isFavourite(game.id);
+    if (was) list.erase(std::remove(list.begin(), list.end(), hex), list.end());
+    else list.push_back(hex);
+    m_favDirty = true;
+    m_settings.save();
+    m_audio.play(was ? "toggle_off" : "toggle_on");
+    sortGames(m_settings.sort); // (to the front, or back to its place)
+    say(trf(was ? "{game} isn't a favourite now." : "{game} is a favourite: first on the Games page.", {game.name}));
+}
+
+void CardsActivity::jumpTo(int page, int index) {
+    m_menu.clear();
+    m_zone = Zone::Cards;
+    if (page != m_page) {
+        m_sels[page] = index; // goToPage reads the selection after the page changes
+        goToPage(page, 0);
+    } else {
+        select(index);
+    }
+}
+
+// Search: every word typed somewhere in the name (any case). One game: there
+// at once; more: a list of them to pick from.
+void CardsActivity::searchGames() {
+    askText("Search games", "Any part of a game's name", "", 64, [this](const std::string& text) {
+        std::vector<std::string> words;
+        {
+            std::string w;
+            for (char c : lower(text) + " ") {
+                if (c == ' ') {
+                    if (!w.empty()) words.push_back(w);
+                    w.clear();
+                } else {
+                    w += c;
+                }
+            }
+        }
+        if (words.empty()) return;
+        struct Hit { int page, index; std::string name; };
+        std::vector<Hit> hits;
+        std::unordered_set<std::uint64_t> seen; // (a game on a custom page too: once, its own page first)
+        auto look = [&](int p) {
+            const auto& list = pageGames(p);
+            for (size_t i = 0; i < list.size(); ++i) {
+                const Game& g = list[i];
+                const std::string name = lower(g.name);
+                bool all = true;
+                for (const std::string& w : words) all = all && name.find(w) != std::string::npos;
+                if (!all || (g.id && !seen.insert(g.id).second)) continue;
+                hits.push_back({p, static_cast<int>(i), g.name});
+            }
+        };
+        for (int p = 0; p < pageCount(); ++p)
+            if (!pageHidden(p)) look(p);
+        if (hits.empty()) {
+            say(trf("No game called \"{words}\".", {text}));
+            return;
+        }
+        if (hits.size() == 1) {
+            jumpTo(hits[0].page, hits[0].index);
+            m_audio.play("tab_transition");
+            return;
+        }
+        std::vector<MenuItem> items;
+        for (const Hit& h : hits) {
+            MenuItem item = action(h.name, [this, h]() { jumpTo(h.page, h.index); });
+            item.value = [this, p = h.page]() { return pageName(p); };
+            items.push_back(std::move(item));
+        }
+        openMenu(trf("{n} games", {std::to_string(hits.size())}), std::move(items));
+    });
+}
+
+// Nextendo: people came online in one of his games (none to some, between
+// two live counts). Each game at most once in 30 minutes; several at once,
+// one notice. The first count after a start is only the baseline.
+void CardsActivity::checkNextendoAlerts() {
+    std::map<std::uint64_t, int> now;
+    std::map<std::uint64_t, std::string> names;
+    for (int p = 0; p < pageCount(); ++p)
+        for (const Game& g : pageGames(p)) {
+            if (!g.id || g.homebrew || !g.action.empty() || now.count(g.id)) continue;
+            now[g.id] = onlineOf(g);
+            names[g.id] = g.name;
+        }
+    const bool had = m_alertBaseline;
+    std::swap(m_alertPrev, now); // (now: the last ones)
+    m_alertBaseline = true;
+    if (!had || !m_settings.nextendoAlerts) return;
+    std::vector<std::pair<std::string, int>> came;
+    for (const auto& [id, n] : m_alertPrev) {
+        const auto before = now.find(id);
+        if (n <= 0 || (before != now.end() && before->second > 0)) continue;
+        const auto told = m_alertAt.find(id);
+        if (told != m_alertAt.end() && m_time - told->second < 1800.f) continue;
+        m_alertAt[id] = m_time;
+        came.emplace_back(names[id], n);
+    }
+    if (came.empty()) return;
+    if (came.size() == 1)
+        notifyCard(came[0].first, trf(came[0].second == 1 ? "{n} player online now" : "{n} players online now",
+                                      {std::to_string(came[0].second)}), "nextendo");
+    else
+        notifyCard(trf("{n} of your games have players", {std::to_string(came.size())}),
+                   came[0].first + ", " + came[1].first + (came.size() > 2 ? ", ..." : ""), "nextendo");
 }
 
 void CardsActivity::askGenres() {
@@ -4282,6 +4410,13 @@ void CardsActivity::openOptions() {
 #endif
     items.push_back(action("Move", [this]() { startMove(); }));
     items.back().glyph = "arrows";
+    if (g.id && g.action != "get") {
+        items.push_back(action(isFavourite(g.id) ? "Remove from favourites" : "Add to favourites",
+                               [this, g]() { toggleFavourite(g); }));
+        items.back().glyph = "star";
+    }
+    items.push_back(action("Search games", [this]() { searchGames(); }));
+    items.back().glyph = "search";
     if (g.action != "get") {
         items.push_back(action("Rename", [this, g]() { renameCard(g); }));
         items.back().glyph = "tag";
@@ -5484,6 +5619,7 @@ void CardsActivity::openDots() {
     m_dotsTiles.push_back({"Discord", "discord", nxui::Color(0.35f, 0.40f, 0.95f, 1.f), [this]() { openDiscord(); }});
     m_dotsTiles.push_back({"Users", "friends", nxui::Color(1.f, 0.6f, 0.2f, 1.f), [this]() { openUsers(); }});
     m_dotsTiles.push_back({"Pages", "copy", nxui::Color(0.36f, 0.68f, 1.f, 1.f), [this]() { openPagePicker(); }});
+    m_dotsTiles.push_back({"Search", "search", nxui::Color(0.3f, 0.75f, 0.85f, 1.f), [this]() { searchGames(); }});
     m_dotsTiles.push_back({"Music", "music", nxui::Color(0.95f, 0.35f, 0.6f, 1.f), [this]() { openMusic(); }});
     m_dotsTiles.push_back({"Quick", "sun", nxui::Color(1.f, 0.78f, 0.25f, 1.f), [this]() { openQuick(); }});
     m_dotsTiles.push_back({"Updates", "sort", nxui::Color(0.25f, 0.8f, 0.5f, 1.f), [this]() { openHomebrewUpdates(); }});
@@ -8599,6 +8735,17 @@ void CardsActivity::openPlayerList() {
             const auto it = m_players.find(id);
             if (it != m_players.end()) n = std::max(n, it->second);
         }
+        if (m_settings.playersMine) { // only games on the console
+            bool mine = false;
+            for (int p = 0; p < pageCount() && !mine; ++p)
+                for (const Game& game : pageGames(p))
+                    if (std::find(g.titles.begin(), g.titles.end(), game.id) != g.titles.end()) {
+                        mine = true;
+                        if (name.empty()) name = game.name;
+                        break;
+                    }
+            if (!mine || n <= 0) continue;
+        }
         if (name.empty()) { // (the total counts it: so does the list)
             unnamed += n;
             unnamedTitles.insert(unnamedTitles.end(), g.titles.begin(), g.titles.end());
@@ -8612,7 +8759,23 @@ void CardsActivity::openPlayerList() {
     });
     if (unnamed > 0) rows.push_back(Row{tr("Other games"), unnamed, std::move(unnamedTitles)});
     std::vector<MenuItem> items;
-    items.reserve(rows.size());
+    items.reserve(rows.size() + 2);
+    // First: all of Nextendo's games, or only the ones on this console being played.
+    // (An action, not a toggle: the list is made again under it, and a toggle's
+    // row is still read after it flips.)
+    MenuItem only = action("Only my games", [this]() {
+        m_settings.playersMine = !m_settings.playersMine;
+        m_settings.save();
+        openPlayerList(); // (again, the other list)
+    });
+    only.stay = true;
+    only.value = [this]() { return tr(m_settings.playersMine ? "On" : "Off"); };
+    items.push_back(std::move(only));
+    MenuItem alerts = toggle("Tell me when people come online", [this]() { return m_settings.nextendoAlerts; }, [this]() {
+        m_settings.nextendoAlerts = !m_settings.nextendoAlerts;
+        m_settings.save();
+    });
+    items.push_back(std::move(alerts));
     for (const Row& row : rows) {
         const auto titles = row.titles;
         MenuItem item = action(row.name, [this, titles]() {
@@ -8651,10 +8814,11 @@ void CardsActivity::openPlayerList() {
         item.value = [n = row.players]() { return std::to_string(n); };
         items.push_back(std::move(item));
     }
-    if (items.empty()) {
+    if (rows.empty() && !m_settings.playersMine) {
         say("Nextendo's game list didn't come through.");
         return;
     }
+    if (rows.empty()) items.push_back(info("Nobody's playing your games right now.", []() { return std::string(); }));
     openMenu(trf("Nextendo · {n} online", {std::to_string(m_playersTotal)}), std::move(items));
 }
 
@@ -10287,6 +10451,7 @@ void CardsActivity::onUpdate(float dt) {
     }
     if (in.isDown(B::ZL)) switchPage(-1);
     if (in.isDown(B::ZR)) switchPage(1);
+    if (in.isDown(B::RStick)) searchGames(); // (the right stick pressed in)
     // Y: a tap switches the grid; held half a second, the chosen game is picked
     // up to move (SwitchU's Y). (The tap acts on letting go, so the hold can be told apart.)
     if (in.isDown(B::Y)) {
@@ -11298,6 +11463,12 @@ void CardsActivity::drawGrid(nxui::Renderer& r) {
             r.drawTriangle({bc.x - tw * 0.35f, bc.y - th * 0.5f}, {bc.x - tw * 0.35f, bc.y + th * 0.5f},
                            {bc.x + tw * 0.65f, bc.y}, green.withAlpha(0.98f * a));
         }
+        if (isFavourite(g.id)) { // starred: top left
+            const float bs = 26.f * sc;
+            const nxui::Vec2 sc0{tile.x + 4.f * sc + bs * 0.5f, tile.y + 4.f * sc + bs * 0.5f};
+            r.drawCircle(sc0, bs * 0.5f, nxui::Color(0.05f, 0.07f, 0.09f, 0.75f * a), 16);
+            CardsActivity::icon(r, "star", sc0.x, sc0.y, bs * 0.62f, nxui::Color(1.f, 0.8f, 0.2f, a));
+        }
     }
 
     // The cursor (SelectionCursor): two breathing rings, 2 and 5 px out, and a
@@ -11588,6 +11759,12 @@ void CardsActivity::drawCardExtras(nxui::Renderer& r) {
             (cartridge == GameCardMarker::Required && m_settings.showRequiredGameCardIcon())) {
             icon(r, cartridge == GameCardMarker::Inserted ? "gamecard" : "gamecard-required",
                  card.x + card.width - 26.f, card.y + 28.f, 28.f, kWhite.withAlpha(alpha));
+        }
+
+        if (isFavourite(g.id)) { // starred: bottom right
+            const nxui::Vec2 c{card.x + card.width - 30.f, card.y + card.height - 30.f};
+            r.drawCircle(c, 19.f, nxui::Color(0.05f, 0.07f, 0.09f, 0.55f * alpha), 24);
+            icon(r, "star", c.x, c.y, 24.f, nxui::Color(1.f, 0.8f, 0.2f, alpha));
         }
 
         if (isRunning(g.id)) { // open now: a pill at the bottom of its card

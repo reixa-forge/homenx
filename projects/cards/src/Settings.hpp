@@ -90,6 +90,9 @@ struct Settings {
     bool forwardersOnGames = true; // installed NRO forwarders on the Games page (as the console's HOME and SwitchU)
     bool customPagesMove = false;  // + puts a game on a custom page by moving it there (off its own page), not a copy
     std::string wallpaper;      // one picture behind everything ("" = each game's art)
+    std::vector<std::string> favourites; // starred with + (ids, hex): first on the Games page, whatever the sort
+    bool nextendoAlerts = true;  // a notice when people come online in a game he has (Nextendo)
+    bool playersMine = false;    // the players list: only games on the console
     std::map<std::string, std::string> names; // + > Rename: by title ID (hex) or .nro path
     std::vector<std::string> sheetOrder; // Settings' tabs by name, in his order (new ones after)
     std::string user;         // who games start as (hex), "" = the last one who played
@@ -251,6 +254,9 @@ struct Settings {
             forwardersOnGames = j.value("forwardersOnGames", forwardersOnGames);
             customPagesMove = j.value("customPagesMove", customPagesMove);
             wallpaper = j.value("wallpaper", wallpaper);
+            favourites = j.value("favourites", favourites);
+            nextendoAlerts = j.value("nextendoAlerts", nextendoAlerts);
+            playersMine = j.value("playersMine", playersMine);
             names = j.value("names", names);
             sheetOrder = j.value("sheetOrder", sheetOrder);
             user = j.value("user", user);
@@ -284,6 +290,9 @@ struct Settings {
         j["customPages"] = nlohmann::json::array();
         for (const auto& page : customPages) j["customPages"].push_back({{"name", page.name}, {"titles", page.titles}, {"moved", page.moved}});
         j["notificationCards"] = notificationCards;
+        j["favourites"] = favourites;
+        j["nextendoAlerts"] = nextendoAlerts;
+        j["playersMine"] = playersMine;
         j["lastPage"] = lastPage;
         j["lockGameBanner"] = lockGameBanner;
         j["lockGameTitle"] = lockGameTitle;
