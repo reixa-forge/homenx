@@ -1873,7 +1873,26 @@ bool nextendoOnline(std::map<std::uint64_t, int>& out, std::vector<NextendoGame>
     out.clear();
     games.clear();
     bool any = false;
-    if (get(std::string(kNextendo) + "/api/online-counts", body) == 200) {
+    // A few games report on their own page. The name is only used when the
+    // site's list didn't already include that title.
+    static const struct { const char* path; std::uint64_t id; bool needsOnline; const char* name; } kOwn[] = {
+        {"/game-stats/sm3dw", 0x010028600EBDA000ULL, false, "Super Mario 3D World + Bowser's Fury"},
+        {"/game-stats/jamboree", 0x0100965017338000ULL, true, "Super Mario Party Jamboree"},
+        {"/game-stats/stardew", 0x0100E65002BB8000ULL, true, "Stardew Valley"},
+        {"/game-stats/kirby", 0x0100A8E016236000ULL, true, "Kirby's Dream Buffet"},
+        {"/game-stats/justdance22", 0x0100EA6014BB8000ULL, true, "Just Dance 2022"},
+        {"/game-stats/uno-count", 0x0100B6E012EBE000ULL, false, "UNO"},
+    };
+    // (One after another on this worker's own connection, kept open: the
+    // site's one TLS handshake, not 8. Asked in parallel they'd each need theirs.)
+    struct Reply { long status = 0; std::string body; };
+    auto fetch = [](const std::string& path) {
+        Reply r;
+        r.status = get(std::string(kNextendo) + path, r.body);
+        return r;
+    };
+    const Reply site = fetch("/api/online-counts");
+    if (site.status == 200 && !(body = site.body).empty()) {
         try {
             const auto root = nlohmann::json::parse(body);
             readCounts(root.value("counts", nlohmann::json::object()), false);
@@ -1900,25 +1919,19 @@ bool nextendoOnline(std::map<std::uint64_t, int>& out, std::vector<NextendoGame>
         } catch (...) {
         }
     }
-    if (get(std::string(kNextendo) + "/service-catalog/v1/online-counts", body) == 200) {
+    const Reply catalog = fetch("/service-catalog/v1/online-counts");
+    if (catalog.status == 200 && !(body = catalog.body).empty()) {
         try {
             readCounts(nlohmann::json::parse(body).value("counts", nlohmann::json::object()), true);
             any = true;
         } catch (...) {
         }
     }
-    // A few games report on their own page. The name is only used when the
-    // site's list didn't already include that title.
-    static const struct { const char* path; std::uint64_t id; bool needsOnline; const char* name; } kOwn[] = {
-        {"/game-stats/sm3dw", 0x010028600EBDA000ULL, false, "Super Mario 3D World + Bowser's Fury"},
-        {"/game-stats/jamboree", 0x0100965017338000ULL, true, "Super Mario Party Jamboree"},
-        {"/game-stats/stardew", 0x0100E65002BB8000ULL, true, "Stardew Valley"},
-        {"/game-stats/kirby", 0x0100A8E016236000ULL, true, "Kirby's Dream Buffet"},
-        {"/game-stats/justdance22", 0x0100EA6014BB8000ULL, true, "Just Dance 2022"},
-        {"/game-stats/uno-count", 0x0100B6E012EBE000ULL, false, "UNO"},
-    };
-    for (const auto& own : kOwn) {
-        if (get(std::string(kNextendo) + own.path, body) != 200) continue;
+    for (size_t i = 0; i < std::size(kOwn); ++i) {
+        const auto& own = kOwn[i];
+        const Reply reply = fetch(own.path);
+        if (reply.status != 200) continue;
+        body = reply.body;
         try {
             const auto j = nlohmann::json::parse(body);
             if (own.needsOnline && !j.value("online", false)) continue;
@@ -1949,6 +1962,115 @@ bool nextendoOnline(std::map<std::uint64_t, int>& out, std::vector<NextendoGame>
         if (saw) g.players = n;
     }
     return any;
+}
+
+// The last counts, kept on the SD card: HOME is a new process at each start
+// (each return from a game), and the counts showed only once the site had
+// answered. Shown at once from here, then replaced by the fresh ones.
+namespace {
+constexpr const char* kNextendoCache = "sdmc:/config/CardsNX/nextendo_counts.json";
+}
+
+void saveNextendoCache(const std::map<std::uint64_t, int>& counts, const std::vector<NextendoGame>& games) {
+    nlohmann::json j;
+    j["at"] = static_cast<std::uint64_t>(std::time(nullptr));
+    j["counts"] = nlohmann::json::object();
+    for (const auto& [id, n] : counts) j["counts"][hexId(id)] = n;
+    j["games"] = nlohmann::json::array();
+    for (const NextendoGame& g : games) {
+        nlohmann::json t = nlohmann::json::array();
+        for (std::uint64_t id : g.titles) t.push_back(hexId(id));
+        j["games"].push_back({{"name", g.name}, {"players", g.players}, {"titles", t}});
+    }
+    std::error_code ec;
+    std::filesystem::create_directories("sdmc:/config/CardsNX", ec);
+    const std::string tmp = std::string(kNextendoCache) + ".tmp";
+    {
+        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+        f << j.dump();
+        if (!f) return;
+    }
+    std::filesystem::remove(kNextendoCache, ec); // (a rename doesn't replace on the SD card)
+    std::filesystem::rename(tmp, kNextendoCache, ec);
+}
+
+bool loadNextendoCache(std::map<std::uint64_t, int>& counts, std::vector<NextendoGame>& games, std::uint64_t maxAgeSeconds) {
+    try {
+        std::ifstream f(kNextendoCache, std::ios::binary);
+        if (!f) return false;
+        const auto j = nlohmann::json::parse(f);
+        const std::uint64_t at = j.value("at", std::uint64_t(0)), now = static_cast<std::uint64_t>(std::time(nullptr));
+        if (!at || now < at || now - at > maxAgeSeconds) return false; // (too old to be "online now")
+        counts.clear();
+        games.clear();
+        for (auto it = j["counts"].begin(); it != j["counts"].end(); ++it)
+            if (it.value().is_number_integer()) counts[std::strtoull(it.key().c_str(), nullptr, 16)] = it.value().get<int>();
+        for (const auto& g : j["games"]) {
+            NextendoGame game;
+            game.name = g.value("name", "");
+            game.players = g.value("players", 0);
+            for (const auto& t : g["titles"])
+                if (t.is_string()) game.titles.push_back(std::strtoull(t.get<std::string>().c_str(), nullptr, 16));
+            games.push_back(std::move(game));
+        }
+        return !counts.empty() || !games.empty();
+    } catch (...) {
+        return false;
+    }
+}
+
+// A game's genre: the first of nlib.cc's categories ("Action", "RPG", ...),
+// the eShop's own. False when the site didn't answer (asked again later);
+// true with an empty genre when it has none or doesn't list the game.
+bool gameGenre(std::uint64_t id, std::string& genre) {
+    genre.clear();
+    std::string body;
+    const long status = get("https://api.nlib.cc/nx/" + hexId(id), body);
+    if (status == 404) return true;
+    if (status != 200) return false;
+    try {
+        const auto j = nlohmann::json::parse(body);
+        if (j.contains("category") && j["category"].is_array())
+            for (const auto& c : j["category"])
+                if (c.is_string() && !c.get<std::string>().empty()) {
+                    genre = c.get<std::string>();
+                    break;
+                }
+    } catch (...) {
+    }
+    return true;
+}
+
+namespace {
+constexpr const char* kGenresCache = "sdmc:/config/CardsNX/genres.json";
+}
+
+std::map<std::uint64_t, std::string> loadGenres() {
+    std::map<std::uint64_t, std::string> out;
+    try {
+        std::ifstream f(kGenresCache, std::ios::binary);
+        if (!f) return out;
+        const auto j = nlohmann::json::parse(f);
+        for (auto it = j.begin(); it != j.end(); ++it)
+            if (it.value().is_string()) out[std::strtoull(it.key().c_str(), nullptr, 16)] = it.value().get<std::string>();
+    } catch (...) {
+    }
+    return out;
+}
+
+void saveGenres(const std::map<std::uint64_t, std::string>& genres) {
+    nlohmann::json j = nlohmann::json::object();
+    for (const auto& [id, g] : genres) j[hexId(id)] = g;
+    std::error_code ec;
+    std::filesystem::create_directories("sdmc:/config/CardsNX", ec);
+    const std::string tmp = std::string(kGenresCache) + ".tmp";
+    {
+        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+        f << j.dump();
+        if (!f) return;
+    }
+    std::filesystem::remove(kGenresCache, ec);
+    std::filesystem::rename(tmp, kGenresCache, ec);
 }
 
 namespace {

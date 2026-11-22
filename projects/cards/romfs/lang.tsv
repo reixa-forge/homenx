@@ -17,7 +17,7 @@ Games	Juegos	Jogos	Игры	Jeux	Spiele	Giochi	ゲーム	游戏	Oyunlar
 Homebrew	Homebrew	Homebrew	Homebrew	Homebrew	Homebrew	Homebrew	自作ソフト	自制软件	Homebrew
 Media	Multimedia	Mídia	Медиа	Médias	Medien	Media	メディア	媒体	Medya
 Last Played	Jugados recientemente	Jogados recentemente	Недавние	Joués récemment	Zuletzt gespielt	Giocati di recente	最近遊んだ順	最近游玩	Son Oynanan
-Title	Título	Título	Название	Titre	Titel	Titolo	タイトル順	名称	Ad
+Title (A-Z)	Título (A-Z)	Título (A-Z)	Название (А-Я)	Titre (A-Z)	Titel (A-Z)	Titolo (A-Z)	タイトル順	名称 (A-Z)	Ad (A-Z)
 Most Played	Más jugados	Mais jogados	Чаще всего	Les plus joués	Meistgespielt	Più giocati	よく遊んだ順	最常游玩	En Çok Oynanan
 My Order	Mi orden	Minha ordem	Мой порядок	Mon ordre	Meine Reihenfolge	Il mio ordine	自分の並び順	我的顺序	Benim Sıram
 White	Blanco	Branco	Белый	Blanc	Weiß	Bianco	ホワイト	白色	Beyaz
@@ -773,3 +773,6 @@ Sent. Thank you! The HomeNX team sees it in #log-reports.	Enviado. ¡Gracias! El
 One report a minute: try again in a moment.	Un informe por minuto: inténtalo en un momento.	Um relatório por minuto: tente de novo daqui a pouco.	Один отчёт в минуту: попробуйте чуть позже.	Un rapport par minute : réessayez dans un instant.	Ein Bericht pro Minute: versuche es gleich noch einmal.	Una segnalazione al minuto: riprova tra poco.	送信は1分に1回です。少し待ってから再試行してください。	每分钟只能发一份报告:请稍后再试。	Dakikada bir rapor: birazdan tekrar dene.
 It couldn't be sent. It's on the SD card: HomeNX-bug-report.zip	No se pudo enviar. Está en la SD: HomeNX-bug-report.zip	Não foi possível enviar. Está no cartão SD: HomeNX-bug-report.zip	Не удалось отправить. Он на SD-карте: HomeNX-bug-report.zip	Envoi impossible. Il est sur la carte SD : HomeNX-bug-report.zip	Senden fehlgeschlagen. Er liegt auf der SD-Karte: HomeNX-bug-report.zip	Impossibile inviarla. È sulla scheda SD: HomeNX-bug-report.zip	送信できませんでした。SDカードにあります: HomeNX-bug-report.zip	无法发送。它在 SD 卡上:HomeNX-bug-report.zip	Gönderilemedi. SD kartta: HomeNX-bug-report.zip
 Homebrew Menu	Menú Homebrew	Menu Homebrew	Меню Homebrew	Menu Homebrew 	Homebrew-Menü	Menu homebrew	Homebrewメニュー	Homebrew 菜单	Homebrew Menüsü
+Online Players	Jugadores en línea	Jogadores online	Игроки онлайн	Joueurs en ligne	Spieler online	Giocatori online	オンラインの人数順	在线玩家	Çevrimiçi Oyuncular
+Genre	Género	Gênero	Жанр	Genre	Genre	Genere	ジャンル順	类型	Tür
+Sorted by {s}	Ordenado por: {s}	Ordenado por: {s}	Сортировка: {s}	Trié par : {s}	Sortiert nach: {s}	Ordinato per: {s}	並び順: {s}	排序方式：{s}	Sıralama: {s}

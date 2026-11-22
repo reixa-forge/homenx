@@ -269,6 +269,14 @@ struct NextendoGame {
 // Players online in Nextendo (nextendo.network), as its site counts them.
 // `out` is by title id (the badge on a card). `games` is one row per game.
 bool nextendoOnline(std::map<std::uint64_t, int>& out, std::vector<NextendoGame>& games);
+// The last counts fetched, on the SD card (shown at once at the next HOME start).
+void saveNextendoCache(const std::map<std::uint64_t, int>& counts, const std::vector<NextendoGame>& games);
+bool loadNextendoCache(std::map<std::uint64_t, int>& counts, std::vector<NextendoGame>& games, std::uint64_t maxAgeSeconds);
+// A game's genre from nlib.cc (its first eShop category). False: no answer
+// (ask again later); true with "" when it has none. Kept on the SD card.
+bool gameGenre(std::uint64_t id, std::string& genre);
+std::map<std::uint64_t, std::string> loadGenres();
+void saveGenres(const std::map<std::uint64_t, std::string>& genres);
 
 // Starts a game once this app has closed: as an application, through the
 // system; as an applet (from the homebrew menu), HomeNX's HOME starts it

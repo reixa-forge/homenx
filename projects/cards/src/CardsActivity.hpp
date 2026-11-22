@@ -272,6 +272,8 @@ private:
     bool pageHidden(int page) const; // Settings > Home > Pages to show
     int firstShownPage() const;
     void sortGames(int sort, bool keepChoice = true, bool requeue = true);
+    int onlineOf(const Game& game) const; // Nextendo's players in it now (0: none or not known)
+    void askGenres();                      // the Games page's games with no genre yet: to worker 0
     void selectById(std::uint64_t id); // its page and card, straight away
     std::uint64_t m_backTo = 0;        // back from this game: it stays chosen until you move
     struct BackStats {
@@ -963,6 +965,13 @@ private:
     std::map<std::uint64_t, int> m_playersIn;
     std::vector<NextendoGame> m_nextendoIn;
     bool m_playersFresh = false;
+    // Genres (the Genre sort): the screen's copy; the new ones from worker 0;
+    // the games it should ask nlib.cc about (all three under m_mu but the first).
+    std::map<std::uint64_t, std::string> m_genres;
+    std::map<std::uint64_t, std::string> m_genresIn;
+    bool m_genresFresh = false;
+    std::vector<std::uint64_t> m_genreWant;
+    std::unordered_set<std::uint64_t> m_genreAsked; // (the screen's: each game asked once a start)
     bool m_quit = false;
     // The console sleeps (set under m_mu, then m_cv told): the workers stop
     // reading the bar's state and asking Nextendo, and only wait for jobs.

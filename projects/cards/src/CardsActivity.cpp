@@ -148,8 +148,11 @@ const MediaApp kMediaApps[] = {
     {"AnikkuNX", {"anikku", nullptr}, nullptr, nullptr},
     {"Cinejoy", {"cinejoy", nullptr}, nullptr, nullptr},
 };
-const char* const kSortNames[] = {"Last Played", "Title", "Most Played", "My Order"};
-constexpr int kSortCycle[] = {1, 3, 0, 2}; // The sort button, Settings > Home > Sort games: Title, My Order, Last Played, Most Played
+const char* const kSortNames[] = {"Last Played", "Title (A-Z)", "Most Played", "My Order", "Online Players", "Genre"};
+constexpr int kSorts = 6;
+// The sort button, Settings > Home > Sort games: A-Z, time played, online
+// players, genre, last played, my order.
+constexpr int kSortCycle[kSorts] = {1, 2, 4, 5, 0, 3};
 struct Accent {
     const char* name;
     nxui::Color color;
@@ -1169,6 +1172,25 @@ void CardsActivity::worker(int index) {
     // The network starts here, not on the screen's thread; the others wait for it
     // (a picture fetched before it's up fails and is asked for again).
     if (index == 0) {
+        // The last counts and the genres known, from the SD card: on screen at
+        // once (HOME starts again at each return from a game; the counts took
+        // ~10 s to come back). The fresh counts replace them seconds later.
+        {
+            std::map<std::uint64_t, int> counts;
+            std::vector<NextendoGame> games;
+            const bool cached = loadNextendoCache(counts, games, 6 * 3600);
+            auto genres = loadGenres();
+            std::lock_guard<std::mutex> lk(m_mu);
+            if (cached && !m_playersFresh) {
+                m_playersIn = std::move(counts);
+                m_nextendoIn = std::move(games);
+                m_playersFresh = true;
+            }
+            if (!genres.empty()) {
+                for (auto& [id, g] : genres) m_genresIn.emplace(id, std::move(g));
+                m_genresFresh = true;
+            }
+        }
         const std::uint64_t t0 = armGetSystemTick();
         m_netUp = !g_safeStart && startNetwork();
         m_netReady = true;
@@ -1179,8 +1201,9 @@ void CardsActivity::worker(int index) {
     } else {
         while (!m_netReady && !m_quit) svcSleepThread(5'000'000ULL);
     }
-    // (Nextendo's players not in the first seconds: the opening has enough to do.)
-    std::uint64_t countsAt = armTicksToNs(armGetSystemTick()) / 1000000ULL + 8000, statusAt = 0, logAt = 0, freeAt = 0, tempAt = 0;
+    // (Nextendo's players 2 s in, ahead of the pictures: 8 s, and only once
+    // the pictures' queue was empty, made them ~10-20 s late at each start.)
+    std::uint64_t countsAt = armTicksToNs(armGetSystemTick()) / 1000000ULL + 2000, statusAt = 0, logAt = 0, freeAt = 0, tempAt = 0;
     std::string lastFree;
     int lastTemp = -1;
     unsigned wakeGen = 0;
@@ -1193,7 +1216,7 @@ void CardsActivity::worker(int index) {
                 wakeGen = m_wakeGen;
                 statusAt = 0;
                 // Nextendo when it's due, a few seconds in (the network comes back first)
-                const std::uint64_t soon = armTicksToNs(armGetSystemTick()) / 1000000ULL + 5000;
+                const std::uint64_t soon = armTicksToNs(armGetSystemTick()) / 1000000ULL + 3000;
                 if (countsAt < soon) countsAt = soon;
             }
         }
@@ -1320,19 +1343,56 @@ void CardsActivity::worker(int index) {
                 key = m_key; // (Settings > Pictures can change it: copied under the lock)
             }
         }
-        if (!haveJob) { // pictures first; Nextendo's players every 3 minutes, when they're shown and awake
-            // (Not in deep idle, 30 s without a press: nobody is looking, and it
-            // was ~10 HTTPS requests every 3 minutes for as long as HOME stayed
-            // up. Fetched within 30 s of the next press once due.)
-            if (index == 0 && m_netUp && !asleep && m_wantPlayers.load() && !m_deepIdleNow.load() && now >= countsAt) {
-                countsAt = now + 180000; // (a connection each time: every 3 minutes is plenty)
-                std::map<std::uint64_t, int> counts;
-                std::vector<NextendoGame> games;
-                if (nextendoOnline(counts, games)) {
+        // Nextendo's players every 3 minutes, when they're shown and awake, even
+        // with pictures queued (the job taken is done right after; workers 1
+        // and 2 go on with the rest). (Not in deep idle, 30 s without a press:
+        // nobody is looking, and it was ~10 HTTPS requests every 3 minutes for
+        // as long as HOME stayed up. Fetched within 30 s of the next press once due.)
+        if (index == 0 && m_netUp && !asleep && m_wantPlayers.load() && !m_deepIdleNow.load() && now >= countsAt) {
+            countsAt = now + 180000; // (a connection each time: every 3 minutes is plenty)
+            std::map<std::uint64_t, int> counts;
+            std::vector<NextendoGame> games;
+            if (nextendoOnline(counts, games)) {
+                saveNextendoCache(counts, games);
+                std::lock_guard<std::mutex> lk(m_mu);
+                m_playersIn = std::move(counts);
+                m_nextendoIn = std::move(games);
+                m_playersFresh = true;
+            } else {
+                countsAt = now + 30000; // (no answer: again soon, not in 3 minutes)
+            }
+        }
+        if (!haveJob) { // pictures first
+            // Genres for the Genre sort, a few at a time between pictures (nlib.cc,
+            // once per game: kept on the SD card).
+            if (index == 0 && m_netUp && !asleep && !m_deepIdleNow.load()) {
+                std::vector<std::uint64_t> ask;
+                {
                     std::lock_guard<std::mutex> lk(m_mu);
-                    m_playersIn = std::move(counts);
-                    m_nextendoIn = std::move(games);
-                    m_playersFresh = true;
+                    while (!m_genreWant.empty() && ask.size() < 4) {
+                        ask.push_back(m_genreWant.back());
+                        m_genreWant.pop_back();
+                    }
+                }
+                if (!ask.empty()) {
+                    static std::map<std::uint64_t, std::string> known = loadGenres(); // (this worker's, to save)
+                    std::map<std::uint64_t, std::string> got;
+                    for (std::uint64_t id : ask) {
+                        if (known.count(id)) { // (on the SD card already: asked before the card was read)
+                            got[id] = known[id];
+                            continue;
+                        }
+                        std::string genre;
+                        if (gameGenre(id, genre)) got[id] = genre;
+                    }
+                    if (!got.empty()) {
+                        for (const auto& [id, g] : got) known[id] = g;
+                        saveGenres(known);
+                        std::lock_guard<std::mutex> lk(m_mu);
+                        for (auto& [id, g] : got) m_genresIn[id] = std::move(g);
+                        m_genresFresh = true;
+                    }
+                    continue; // (more right away, if there are)
                 }
             }
             continue;
@@ -1674,6 +1734,7 @@ void CardsActivity::wantArt() {
 void CardsActivity::takeArt() {
     std::vector<Done> done;
     bool roomFreed = false;
+    bool resortLater = false; // (new counts or genres for the sort chosen: after the lock)
     {
         std::lock_guard<std::mutex> lk(m_mu);
         const size_t n = std::min<size_t>(8, m_done.size()); // up to 8 a frame, 4 ms at most (below); 3 kept a page of grid icons waiting
@@ -1693,6 +1754,13 @@ void CardsActivity::takeArt() {
             } else {
                 for (const auto& p : m_players) m_playersTotal += p.second;
             }
+            if (m_settings.sort == 4) resortLater = true;
+        }
+        if (m_genresFresh) {
+            for (auto& [id, g] : m_genresIn) m_genres[id] = std::move(g);
+            m_genresIn.clear();
+            m_genresFresh = false;
+            if (m_settings.sort == 5) resortLater = true;
         }
         if (m_statusFresh) {
             m_statusFresh = false;
@@ -1717,6 +1785,9 @@ void CardsActivity::takeArt() {
     // every loop turn woke the three workers ~180 times a second, deep idle
     // included, for them to find nothing to do.
     if (roomFreed) m_cv.notify_all();
+    // Sorted by online players or genre: again with the new numbers (the game
+    // chosen stays chosen). Not while a game is being moved.
+    if (resortLater && !m_moving && (m_settings.sort == 4 || m_settings.sort == 5)) sortGames(m_settings.sort);
     const Game* cur = current();
     const std::uint64_t selected = cur ? cur->id : 0;
     const std::uint64_t until = armGetSystemTick() + armNsToTicks(4'000'000ULL);
@@ -2087,13 +2158,25 @@ void CardsActivity::sortGames(int sort, bool keepChoice, bool requeue) {
     LibraryEdit edit(*this);
     auto& page = m_pages[kGames];
     const std::uint64_t keep = page.empty() ? 0 : page[(size_t)std::clamp(m_sels[kGames], 0, (int)page.size() - 1)].id;
-    m_settings.sort = std::clamp(sort, 0, 3);
+    m_settings.sort = std::clamp(sort, 0, kSorts - 1);
+    if (m_settings.sort == 5) askGenres();
     if (m_settings.sort == 3) {
         applyOrder(kGames);
     } else {
         std::stable_sort(page.begin(), page.end(), [&](const Game& a, const Game& b) {
             switch (m_settings.sort) {
                 case 1: return lower(a.name) < lower(b.name);
+                case 4: { // the most players first; then (none online) A-Z
+                    const int na = onlineOf(a), nb = onlineOf(b);
+                    return na != nb ? na > nb : lower(a.name) < lower(b.name);
+                }
+                case 5: { // by genre, A-Z inside each; no genre known last
+                    const auto ga = m_genres.find(a.id), gb = m_genres.find(b.id);
+                    const std::string sa = ga == m_genres.end() ? std::string() : lower(ga->second);
+                    const std::string sb = gb == m_genres.end() ? std::string() : lower(gb->second);
+                    if (sa.empty() != sb.empty()) return !sa.empty();
+                    return sa != sb ? sa < sb : lower(a.name) < lower(b.name);
+                }
                 case 2: return a.playSeconds != b.playSeconds ? a.playSeconds > b.playSeconds : a.order < b.order;
                 default: return a.lastPlayed != b.lastPlayed ? a.lastPlayed > b.lastPlayed : a.order < b.order;
             }
@@ -2104,6 +2187,27 @@ void CardsActivity::sortGames(int sort, bool keepChoice, bool requeue) {
         if (page[i].id == keep) m_sels[kGames] = static_cast<int>(i);
     if (m_page == kGames) m_scroll = static_cast<float>(m_sels[kGames]);
     if (requeue) requeueArt();
+}
+
+int CardsActivity::onlineOf(const Game& game) const {
+    int n = 0;
+    const auto it = m_players.find(game.id);
+    if (it != m_players.end()) n = std::max(0, it->second);
+    for (const NextendoGame& g : m_nextendoGames) // (one lobby for several titles: Scarlet and Violet)
+        if (std::find(g.titles.begin(), g.titles.end(), game.id) != g.titles.end()) n = std::max(n, g.players);
+    return n;
+}
+
+void CardsActivity::askGenres() {
+    std::vector<std::uint64_t> want;
+    for (const Game& g : m_pages[kGames])
+        if (!g.homebrew && g.id && !m_genres.count(g.id) && m_genreAsked.insert(g.id).second) // (homebrew: not on the eShop)
+            want.push_back(g.id);
+    std::lock_guard<std::mutex> lk(m_mu);
+    for (std::uint64_t id : want)
+        if (!m_genresIn.count(id) && std::find(m_genreWant.begin(), m_genreWant.end(), id) == m_genreWant.end())
+            m_genreWant.push_back(id);
+    m_cv.notify_all();
 }
 
 // My order (Plus > Move): the saved ids first, in their order; the rest after
@@ -6643,9 +6747,9 @@ void CardsActivity::buildSettings() {
     home.rows.push_back(choice("Sort games", [this]() { return std::string(kSortNames[m_settings.sort]); },
         [this, save](int d) {
             int at = 0;
-            for (int i = 0; i < 4; ++i)
+            for (int i = 0; i < kSorts; ++i)
                 if (kSortCycle[i] == m_settings.sort) at = i;
-            sortGames(kSortCycle[(at + d + 4) % 4]);
+            sortGames(kSortCycle[(at + d + kSorts) % kSorts]);
             save();
         }, "My Order is how you arranged them (Plus > Move)"));
     home.rows.push_back(toggle("NRO forwarders with the games", [this]() { return m_settings.forwardersOnGames; },
@@ -8562,11 +8666,12 @@ void CardsActivity::activateTop(int index) {
         case kTopSort:
             if (m_page == kGames) {
                 int at = 0;
-                for (int i = 0; i < 4; ++i)
+                for (int i = 0; i < kSorts; ++i)
                     if (kSortCycle[i] == m_settings.sort) at = i;
-                sortGames(kSortCycle[(at + 1) % 4]);
+                sortGames(kSortCycle[(at + 1) % kSorts]);
                 m_settings.save();
                 m_audio.play("toggle_on");
+                say(trf("Sorted by {s}", {tr(kSortNames[m_settings.sort])})); // (which one it is now)
             } else {
                 switchPage(1);
             }
