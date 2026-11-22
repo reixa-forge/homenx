@@ -115,6 +115,7 @@ public:
     void drawTriangle(const Vec2& p1, const Vec2& p2, const Vec2& p3, const Color& c);
     void drawLine(const Vec2& from, const Vec2& to, const Color& c, float thickness = 1.f);
     void drawGradientRect(const Rect& r, const Color& top, const Color& bottom);
+    void drawGradientRectH(const Rect& r, const Color& left, const Color& right); // left to right
     void drawTexture(const Texture* tex, const Rect& dest, const Color& tint = Color::white());
     void drawTextureSub(const Texture* tex, const Rect& src, const Rect& dest, const Color& tint = Color::white());
     void drawTextureRounded(const Texture* tex, const Rect& dest, float radius, const Color& tint = Color::white());

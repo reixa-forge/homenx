@@ -190,6 +190,18 @@ void Renderer::drawGradientRect(const Rect& r, const Color& top, const Color& bo
     addQuadGrad(r.x, r.y, r.right(), r.bottom(), 0, 0, 1, 1, top, bottom);
 }
 
+void Renderer::drawGradientRectH(const Rect& r, const Color& left, const Color& right) {
+    m_texturing = false;
+    m_boundTex = nullptr;
+    if (m_vtxCount + 6 > GpuDevice::MAX_VERTICES) flush();
+    addVertex(r.x, r.y, 0, 0, left);
+    addVertex(r.right(), r.y, 1, 0, right);
+    addVertex(r.right(), r.bottom(), 1, 1, right);
+    addVertex(r.x, r.y, 0, 0, left);
+    addVertex(r.right(), r.bottom(), 1, 1, right);
+    addVertex(r.x, r.bottom(), 0, 1, left);
+}
+
 void Renderer::drawRoundedRect(const Rect& r, const Color& c, float radius) {
     if (radius <= 0.f) { drawRect(r, c); return; }
     float rad = std::min(radius, std::min(r.width, r.height) * 0.5f);

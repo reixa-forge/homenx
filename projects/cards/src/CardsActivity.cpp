@@ -12190,10 +12190,8 @@ void CardsActivity::drawCrossList(nxui::Renderer& r) {
     if (m_settings.crossBg > 0)
         r.drawRect({0.f, 0.f, 1280.f, 720.f}, nxui::Color(0.02f, 0.03f, 0.05f, (m_settings.crossBg == 1 ? 0.45f : 0.88f) * intro));
     // A shade on the left, where the list is read.
-    for (int band = 0; band < 20; ++band) { // (a soft fade to the right: 20 strips)
-        const float x0 = static_cast<float>(band) * 48.f;
-        r.drawRect({x0, 0.f, 48.f, 720.f}, nxui::Color(0.f, 0.f, 0.f, 0.36f * intro * (1.f - static_cast<float>(band) / 20.f)));
-    }
+    // (One smooth gradient: 20 strips of falling shade showed as lines.)
+    r.drawGradientRectH({0.f, 0.f, 960.f, 720.f}, nxui::Color(0.f, 0.f, 0.f, 0.36f * intro), nxui::Color(0.f, 0.f, 0.f, 0.f));
 
     // The categories.
     const auto pages = crossPages();
