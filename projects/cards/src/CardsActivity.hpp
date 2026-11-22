@@ -212,6 +212,23 @@ private:
     bool morphing() const { return m_gridIn > 0.f && m_gridIn < 1.f; }
     int m_forceLayout = -1; // (cardRect: either layout's place, while they morph)
     void toggleGrid();
+    // The cross view (Y's third look): the pages side by side along the top,
+    // then System; the chosen page's games in a list going down.
+    void cycleView();                 // Y: cards, grid, cross, cards
+    void setCrossView(bool on);
+    bool updateCross(float dt);       // its buttons (false: the bar has them)
+    void drawCross(nxui::Renderer& r);
+    bool crossTouch(float x, float y);
+    std::vector<int> crossPages() const;  // the pages shown, in your order
+    int crossCat() const;                 // the category chosen (crossPages().size(): System)
+    void crossCatTo(int cat);
+    struct CrossItem { std::string label, glyph; std::function<std::string()> value; std::function<void()> run; };
+    std::vector<CrossItem> crossSystem();
+    bool m_crossSystem = false;   // System chosen
+    int m_crossSysSel = 0;
+    float m_crossCat = 0.f, m_crossRow = 0.f, m_crossSysRow = 0.f; // drawn (they ease to the chosen)
+    float m_crossDrawnAt = 0.f, m_crossRepeat = 0.f, m_crossVRepeat = 0.f;
+    float m_crossListIn = 1.f;    // the list fading in after the category changed
     void drawGrid(nxui::Renderer& r);
     void updateGrid(float dt);
     bool gridMove(int dx, int dy);  // false when the move leaves the grid (up from the top row)

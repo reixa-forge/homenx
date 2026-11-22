@@ -1651,6 +1651,8 @@ void CardsActivity::wantArt() {
         add(s + d, kIcon);
         add(s - d, kIcon);
     }
+    if (m_settings.xmbView) // the cross view's list: the console's icons, the rows on screen
+        for (int d = -2; d <= 6; ++d) add(s + d, kStock);
     if (gridOn()) {
         // The grid shows the console's own icons: the whole page, then the
         // pages either side; and the backgrounds of the tiles around the cursor.
@@ -6981,8 +6983,20 @@ void CardsActivity::buildSettings() {
     look.rows.push_back(std::move(wall));
     look.rows.push_back(slider("Background softness", [this]() { return m_settings.haze * 100 / 80; },
         [this, save](int v) { m_settings.haze = v * 80 / 100; save(); }, "A haze over the game's art"));
-    look.rows.push_back(toggle("Grid view", [this]() { return m_settings.gridView; },
-        [this]() { toggleGrid(); }, "SwitchU's Wii U grid of icons instead of the cards (Y; hold Y to move a game)"));
+    look.rows.push_back(toggle("Grid view", [this]() { return m_settings.gridView && !m_settings.xmbView; },
+        [this]() {
+            if (m_settings.xmbView) {
+                setCrossView(false);
+                if (!m_settings.gridView) toggleGrid();
+            } else {
+                toggleGrid();
+            }
+        }, "SwitchU's Wii U grid of icons instead of the cards (Y; hold Y to move a game)"));
+    look.rows.push_back(toggle("Cross view", [this]() { return m_settings.xmbView; },
+        [this]() {
+            if (!m_settings.xmbView && m_settings.gridView) toggleGrid(); // (back to the cards under it)
+            setCrossView(!m_settings.xmbView);
+        }, "Your pages along the top and their games in a list (Y goes cards, grid, cross)"));
     look.rows.push_back(toggle("Moving background", [this]() { return m_settings.bgMotion; },
         [this, save]() { m_settings.bgMotion = !m_settings.bgMotion; save(); }, "The art drifts slowly"));
     look.rows.push_back(choice("Clock", [this]() { return std::string(m_settings.clock24 ? "24-hour" : "12-hour"); },
@@ -9202,6 +9216,7 @@ bool CardsActivity::handleTouch() {
         return true;
     }
 
+    if (m_settings.xmbView && y >= 95.f) return crossTouch(x, y); // (the bar: as always, below)
     if (in.touchDown()) {
         m_touchOnCards = y > 100.f && y < (gridOn() ? 650.f : 490.f);
         m_touchScroll = m_scroll;
@@ -10323,6 +10338,7 @@ void CardsActivity::onUpdate(float dt) {
         updatePopup();
         return;
     }
+    if (m_settings.xmbView && !m_moving && m_zone != Zone::Top && updateCross(dt)) return;
 
     // Left / right: repeating while held.
     const bool left = in.isHeld(B::DLeft) || in.isHeld(B::LStickL) || in.isHeld(B::RStickL);
@@ -10464,7 +10480,7 @@ void CardsActivity::onUpdate(float dt) {
     }
     if (m_yArmed && in.isUp(B::Y)) {
         m_yArmed = false;
-        toggleGrid();
+        cycleView();
     }
 }
 
@@ -10590,7 +10606,7 @@ void CardsActivity::draw(nxui::Renderer& r) {
     drawStep("draw: the background");
     drawBackground(r);
     drawStep("draw: the cards");
-    drawCards(r);
+    if (!m_settings.xmbView) drawCards(r);
     drawStep("draw: the glass");
     // One blurred copy of the frame for every glass shape on top of it, made
     // again when what's behind changed: at once while things move, every 6th
@@ -10629,7 +10645,8 @@ void CardsActivity::draw(nxui::Renderer& r) {
         m_blurAge = 1000; // made at once when it's back
     }
     drawStep("draw: the cards' extras");
-    drawCardExtras(r);
+    if (m_settings.xmbView) drawCross(r); // (after the blurred copy: its glass shows the art behind)
+    else drawCardExtras(r);
     drawStep("draw: the bar and the panel");
     // Launching: the bar and the panel go first.
     const int leaveStyle = launchStyle();
@@ -10637,7 +10654,7 @@ void CardsActivity::draw(nxui::Renderer& r) {
     drawTopBar(r, easeOut(m_intro * 2.2f) * ui);
     drawGameCard(r, easeOut(m_intro * 2.2f) * ui);
     drawStep("draw: the panel");
-    drawPanel(r, easeOut((m_intro - 0.25f) * 2.f) * ui * (1.f - easeOut(m_gridIn)));
+    if (!m_settings.xmbView) drawPanel(r, easeOut((m_intro - 0.25f) * 2.f) * ui * (1.f - easeOut(m_gridIn)));
     drawStep("draw: the messages");
     if (m_moving && !gridOn()) { // what Move does (the grid says it in its pill, as SwitchU)
         const std::string hint = "Move it with  < >      A  Done      B  Put it back";
@@ -11031,6 +11048,387 @@ bool CardsActivity::cardRectAt(int index, nxui::Rect& card, float& chosen) {
             const float k = 1.f + 2.4f * easeIn(m_leaveT / 0.8f);
             card = {640.f + (card.x - 640.f) * k, 330.f + (card.y - 330.f) * k, card.width * k, card.height * k};
         }
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------- the cross view
+
+// Y: the cards, the grid, the cross view, and round again.
+void CardsActivity::cycleView() {
+    if (m_settings.xmbView) {
+        setCrossView(false); // (to the cards)
+        return;
+    }
+    if (m_settings.gridView) {
+        toggleGrid(); // (the grid goes: the cards under it, not shown)
+        setCrossView(true);
+        return;
+    }
+    toggleGrid();
+}
+
+void CardsActivity::setCrossView(bool on) {
+    if (on == m_settings.xmbView) return;
+    m_settings.xmbView = on;
+    m_settings.save();
+    m_zone = Zone::Cards;
+    m_crossSystem = false;
+    m_crossCat = static_cast<float>(crossCat());
+    m_crossRow = static_cast<float>(std::max(0, sel()));
+    m_crossListIn = m_settings.motion ? 0.f : 1.f;
+    m_scroll = static_cast<float>(std::max(0, sel())); // (the cards: where they were)
+    m_audio.play(on ? "toggle_on" : "toggle_off");
+    if (on) say("Cross view");
+    wantArt();
+}
+
+std::vector<int> CardsActivity::crossPages() const {
+    std::vector<int> pages;
+    for (int p : m_settings.pageOrder)
+        if (p >= 0 && p < pageCount() && !pageHidden(p)) pages.push_back(p);
+    if (pages.empty()) pages.push_back(m_page);
+    return pages;
+}
+
+int CardsActivity::crossCat() const {
+    const auto pages = crossPages();
+    if (m_crossSystem) return static_cast<int>(pages.size());
+    for (size_t i = 0; i < pages.size(); ++i)
+        if (pages[i] == m_page) return static_cast<int>(i);
+    return 0;
+}
+
+void CardsActivity::crossCatTo(int cat) {
+    const auto pages = crossPages();
+    cat = std::clamp(cat, 0, static_cast<int>(pages.size()));
+    if (cat == crossCat()) return;
+    m_crossListIn = m_settings.motion ? 0.f : 1.f;
+    if (cat == static_cast<int>(pages.size())) {
+        m_crossSystem = true;
+        m_crossSysSel = 0;
+        m_crossSysRow = 0.f;
+        m_audio.play("tab_transition");
+        return;
+    }
+    m_crossSystem = false;
+    if (pages[(size_t)cat] == m_page) {
+        m_audio.play("tab_transition");
+    } else {
+        goToPage(pages[(size_t)cat], cat > crossCat() ? 1 : -1);
+    }
+    m_crossRow = static_cast<float>(std::max(0, sel()));
+}
+
+// System: what the bar's buttons do, as a list.
+std::vector<CardsActivity::CrossItem> CardsActivity::crossSystem() {
+    std::vector<CrossItem> items;
+    items.push_back({"Settings", "gear", nullptr, [this]() { openSettings(); }});
+    items.push_back({"Search games", "search", nullptr, [this]() { searchGames(); }});
+    items.push_back({"Sort games", "sort", [this]() { return tr(kSortNames[std::clamp(m_settings.sort, 0, kSorts - 1)]); },
+                     [this]() { activateTop(kTopSort); }});
+    if (m_settings.players)
+        items.push_back({"Nextendo players", "nextendo",
+                         [this]() { return m_playersTotal >= 0 ? trf("{n} online", {std::to_string(m_playersTotal)}) : std::string(); },
+                         [this]() { openPlayerList(); }});
+    items.push_back({"Notifications", "bell", nullptr, [this]() { openNotifications(); }});
+    items.push_back({"Quick Settings", "sun", nullptr, [this]() { openQuick(); }});
+    items.push_back({"Power", "power", nullptr, [this]() { openPower(); }});
+    return items;
+}
+
+// The cross view's buttons: left / right the category, up / down the list
+// (up from its top: the bar), A starts it, + its options; L / R five rows,
+// ZL / ZR the category too. Y as everywhere. False: the bar's turn.
+bool CardsActivity::updateCross(float dt) {
+    auto& in = app().input();
+    using B = nxui::Button;
+    const bool left = in.isHeld(B::DLeft) || in.isHeld(B::LStickL) || in.isHeld(B::RStickL);
+    const bool right = in.isHeld(B::DRight) || in.isHeld(B::LStickR) || in.isHeld(B::RStickR);
+    const bool up = in.isHeld(B::DUp) || in.isHeld(B::LStickU) || in.isHeld(B::RStickU);
+    const bool down = in.isHeld(B::DDown) || in.isHeld(B::LStickD) || in.isHeld(B::RStickD);
+    const bool leftDown = in.isDown(B::DLeft) || in.isDown(B::LStickL) || in.isDown(B::RStickL);
+    const bool rightDown = in.isDown(B::DRight) || in.isDown(B::LStickR) || in.isDown(B::RStickR);
+    const bool upDown = in.isDown(B::DUp) || in.isDown(B::LStickU) || in.isDown(B::RStickU);
+    const bool downDown = in.isDown(B::DDown) || in.isDown(B::LStickD) || in.isDown(B::RStickD);
+
+    int across = leftDown ? -1 : rightDown ? 1 : 0;
+    if (across) m_crossRepeat = 0.35f;
+    else if (left || right) {
+        if ((m_crossRepeat -= dt) <= 0.f) {
+            across = left ? -1 : 1;
+            m_crossRepeat = 0.18f;
+        }
+    }
+    if (in.isDown(B::ZL)) across = -1;
+    if (in.isDown(B::ZR)) across = 1;
+    if (across) crossCatTo(crossCat() + across);
+
+    int vert = upDown ? -1 : downDown ? 1 : 0;
+    if (vert) m_crossVRepeat = 0.32f;
+    else if (up || down) {
+        if ((m_crossVRepeat -= dt) <= 0.f) {
+            vert = up ? -1 : 1;
+            m_crossVRepeat = 0.07f;
+        }
+    }
+    if (in.isDown(B::L)) vert = -5;
+    if (in.isDown(B::R)) vert = 5;
+    if (m_crossSystem) {
+        const int n = static_cast<int>(crossSystem().size());
+        if (vert < 0 && m_crossSysSel == 0 && upDown) {
+            m_zone = Zone::Top; // (to the bar)
+            m_audio.play("navigation");
+        } else if (vert) {
+            const int to = std::clamp(m_crossSysSel + vert, 0, n - 1);
+            if (to != m_crossSysSel) m_audio.play("navigation");
+            m_crossSysSel = to;
+        }
+    } else if (vert < 0 && sel() <= 0 && upDown) {
+        m_zone = Zone::Top;
+        m_audio.play("navigation");
+    } else if (vert && !games().empty()) {
+        select(sel() + vert);
+    }
+
+    if (in.isDown(B::A)) {
+        if (m_crossSystem) {
+            auto items = crossSystem();
+            if (m_crossSysSel >= 0 && m_crossSysSel < static_cast<int>(items.size())) {
+                m_audio.play("activation");
+                auto run = items[(size_t)m_crossSysSel].run;
+                run();
+            }
+        } else if (!games().empty()) {
+            press(1, sel());
+            play();
+        }
+        return true;
+    }
+    if (in.isDown(B::Plus) && !m_crossSystem) openOptions();
+    if (in.isDown(B::X)) askClose();
+    if (in.isDown(B::Minus)) openQuick();
+    if (in.isDown(B::RStick)) searchGames();
+    // Y: a tap, the next look; held half a second, the game is picked up to
+    // move, in the cards (the list has no room to show it).
+    if (in.isDown(B::Y)) {
+        m_yAt = m_time;
+        m_yArmed = true;
+    }
+    if (m_yArmed && in.isHeld(B::Y) && m_time - m_yAt >= 0.5f) {
+        m_yArmed = false;
+        if (!m_crossSystem && !games().empty()) {
+            setCrossView(false);
+            startMove();
+        }
+    }
+    if (m_yArmed && in.isUp(B::Y)) {
+        m_yArmed = false;
+        cycleView();
+    }
+    return true;
+}
+
+namespace {
+constexpr float kCrossX = 250.f;       // the chosen column's middle
+constexpr float kCrossCatY = 158.f;    // the categories' icons
+constexpr float kCrossCatStep = 200.f;
+constexpr float kCrossSelY = 400.f;    // the chosen row's middle
+
+// A row's place and size at d rows from the chosen (fractions while it eases).
+void crossRow(float d, float& y, float& size, float& alpha) {
+    if (d <= 0.f) {
+        y = kCrossSelY + d * 122.f; // one row shows above the chosen, under the categories
+        size = 128.f + std::max(-1.f, d) * 64.f;
+        alpha = std::clamp(1.f + d * 0.6f, 0.f, 1.f) * (d < -1.f ? std::clamp(2.f + d, 0.f, 1.f) : 1.f);
+    } else {
+        y = d <= 1.f ? kCrossSelY + d * 124.f : kCrossSelY + 124.f + (d - 1.f) * 94.f;
+        size = 128.f - std::min(1.f, d) * 56.f;
+        alpha = std::clamp(1.f - std::max(0.f, d - 1.f) * 0.18f, 0.f, 1.f);
+    }
+}
+} // namespace
+
+void CardsActivity::drawCross(nxui::Renderer& r) {
+    const float dt = std::clamp(m_time - m_crossDrawnAt, 0.f, 0.1f);
+    m_crossDrawnAt = m_time;
+    const float k = m_settings.motion ? std::min(1.f, dt * 13.f) : 1.f;
+    const int cat = crossCat();
+    m_crossCat += (static_cast<float>(cat) - m_crossCat) * k;
+    m_crossRow += (static_cast<float>(std::max(0, sel())) - m_crossRow) * k;
+    m_crossSysRow += (static_cast<float>(m_crossSysSel) - m_crossSysRow) * k;
+    m_crossListIn = std::min(1.f, m_crossListIn + dt * 5.f);
+    const float intro = easeOut(m_intro * 2.2f);
+    const float listA = intro * easeOut(m_crossListIn);
+    const float listDx = (1.f - easeOut(m_crossListIn)) * 40.f;
+
+    // A shade on the left, where the list is read.
+    for (int band = 0; band < 20; ++band) { // (a soft fade to the right: 20 strips)
+        const float x0 = static_cast<float>(band) * 48.f;
+        r.drawRect({x0, 0.f, 48.f, 720.f}, nxui::Color(0.f, 0.f, 0.f, 0.36f * intro * (1.f - static_cast<float>(band) / 20.f)));
+    }
+
+    // The categories.
+    const auto pages = crossPages();
+    const int cats = static_cast<int>(pages.size()) + 1;
+    auto catGlyph = [&](int i) -> const char* {
+        if (i >= static_cast<int>(pages.size())) return "gear";
+        switch (pages[(size_t)i]) {
+            case kGames: return "pad";
+            case kHomebrew: return "tag";
+            case kNintendo: return "home";
+            case kMedia: return "music";
+            default: return "copy";
+        }
+    };
+    for (int i = 0; i < cats; ++i) {
+        const float d = static_cast<float>(i) - m_crossCat;
+        const float x = kCrossX + d * kCrossCatStep;
+        if (x < -100.f || x > 1380.f) continue;
+        const float near = std::clamp(1.f - std::abs(d), 0.f, 1.f);
+        const float a = intro * (d < 0.f ? std::clamp(1.f + d * 0.7f, 0.f, 1.f) * 0.7f : 0.55f + 0.45f * near);
+        if (a <= 0.01f) continue;
+        const float size = 52.f + 16.f * near;
+        if (near > 0.01f)
+            r.drawCircle({x, kCrossCatY}, size * 0.62f, nxui::Color(1.f, 1.f, 1.f, 0.10f * near * a), 32);
+        icon(r, catGlyph(i), x, kCrossCatY, size * 0.6f, kWhite.withAlpha(a));
+        const std::string name = i >= static_cast<int>(pages.size()) ? tr("System") : pageName(pages[(size_t)i]);
+        const float w = measured(m_fLabel, name).x * (0.82f + 0.18f * near);
+        r.drawText(name, {x - w * 0.5f, kCrossCatY + 44.f}, &m_fLabel, kWhite.withAlpha(a * (0.6f + 0.4f * near)),
+                   0.82f + 0.18f * near);
+    }
+
+    const float textX = kCrossX + 84.f + listDx;
+    if (m_crossSystem) {
+        const auto items = crossSystem();
+        for (size_t i = 0; i < items.size(); ++i) {
+            float y, size, a;
+            crossRow(static_cast<float>(i) - m_crossSysRow, y, size, a);
+            a *= listA;
+            if (a <= 0.01f || y < 230.f || y > 760.f) continue;
+            const bool chosen = static_cast<int>(i) == m_crossSysSel;
+            const float s = size * 0.55f;
+            r.drawCircle({kCrossX + listDx, y}, s * 0.75f, nxui::Color(1.f, 1.f, 1.f, (chosen ? 0.16f : 0.07f) * a), 32);
+            icon(r, items[i].glyph.c_str(), kCrossX + listDx, y, s * 0.6f, kWhite.withAlpha(a));
+            textMid(r, chosen ? m_fTitle : m_fLabel, items[i].label, textX, y - (items[i].value ? 12.f : 0.f), kWhite.withAlpha(a));
+            if (items[i].value) {
+                const std::string v = items[i].value();
+                if (!v.empty()) textMid(r, m_fBody, v, textX, y + 18.f, kMuted.withAlpha(a));
+            }
+        }
+        return;
+    }
+
+    const auto& list = games();
+    if (list.empty()) {
+        textMid(r, m_fLabel, "Nothing on this page yet.", textX - 84.f, kCrossSelY, kMuted.withAlpha(listA));
+        return;
+    }
+    const int first = std::max(0, static_cast<int>(std::floor(m_crossRow)) - 2);
+    const int last = std::min(static_cast<int>(list.size()) - 1, static_cast<int>(std::ceil(m_crossRow)) + 6);
+    for (int i = first; i <= last; ++i) {
+        const Game& g = list[(size_t)i];
+        float y, size, a;
+        crossRow(static_cast<float>(i) - m_crossRow, y, size, a);
+        a *= listA;
+        if (a <= 0.01f || y < 230.f || y > 780.f) continue;
+        const bool chosen = i == sel();
+        const nxui::Rect box{kCrossX + listDx - size * 0.5f, y - size * 0.5f, size, size};
+        const auto it = m_art.find(g.id);
+        const nxui::Texture* tex = nullptr;
+        if (it != m_art.end()) {
+            if (it->second.stock && it->second.stock->valid()) tex = it->second.stock.get();
+            else if (it->second.icon && it->second.icon->valid()) tex = it->second.icon.get();
+        }
+        if (chosen) // a soft glow behind the chosen one
+            r.drawRoundedRect({box.x - 6.f, box.y - 6.f, box.width + 12.f, box.height + 12.f},
+                              nxui::Color(1.f, 1.f, 1.f, 0.10f * a), 18.f);
+        if (tex) {
+            r.drawTextureRounded(tex, box, 12.f * size / 128.f, kWhite.withAlpha(a));
+        } else {
+            frost(r, box, 12.f, glassTint(a));
+            icon(r, g.homebrew ? "tag" : "pad", box.x + size * 0.5f, y, size * 0.4f, kWhite.withAlpha(a * 0.8f));
+        }
+        if (isFavourite(g.id))
+            icon(r, "star", box.x + size - 10.f, box.y + 10.f, 18.f * size / 128.f + 4.f, nxui::Color(1.f, 0.8f, 0.2f, a));
+        const float tx = kCrossX + listDx + size * 0.5f + 26.f;
+        if (!chosen) {
+            textMid(r, m_fLabel, fit(m_fLabel, g.name, 1240.f - tx), tx, y, kWhite.withAlpha(a * 0.85f));
+            continue;
+        }
+        // The chosen one: its name, then what's known about it.
+        textMid(r, m_fTitle, fit(m_fTitle, g.name, 1240.f - tx), tx, y - 18.f, kWhite.withAlpha(a));
+        std::string about;
+        if (g.playSeconds || g.lastPlayed)
+            about = trf("{time} played", {playTime(g.playSeconds)}) + "  ·  " + lastPlayed(g.lastPlayed);
+        else if (!g.author.empty())
+            about = g.author;
+        float ax = tx;
+        const int online = m_settings.players ? onlineOf(g) : 0;
+        if (online > 0) {
+            r.drawCircle({ax + 7.f, y + 20.f}, 6.f, kGreen.withAlpha(a), 20);
+            const std::string n = trf("{n} online", {std::to_string(online)});
+            textMid(r, m_fBody, n, ax + 20.f, y + 20.f, kWhite.withAlpha(a));
+            ax += 20.f + measured(m_fBody, n).x + 22.f;
+        }
+        if (isRunning(g.id)) {
+            icon(r, "play", ax + 7.f, y + 20.f, 14.f, kGreen.withAlpha(a));
+            textMid(r, m_fBody, "Open now", ax + 20.f, y + 20.f, kGreen.withAlpha(a));
+            ax += 20.f + measured(m_fBody, tr("Open now")).x + 22.f;
+        }
+        if (!about.empty()) textMid(r, m_fBody, fit(m_fBody, about, 1240.f - ax), ax, y + 20.f, kMuted.withAlpha(a));
+    }
+    if (sel() > 1) { // more above, out of sight
+        const std::string more = trf("{n} more", {std::to_string(sel() - 1)});
+        textMid(r, m_fBadge, more, kCrossX + 84.f, kCrossCatY + 96.f, kMuted.withAlpha(listA * 0.7f));
+    }
+}
+
+// A tap: a category goes to it; a row is chosen, and tapped again it starts.
+bool CardsActivity::crossTouch(float x, float y) {
+    auto& in = app().input();
+    if (!in.touchUp()) return in.isTouching();
+    if (std::abs(in.touchStartX() - x) > 30.f || std::abs(in.touchStartY() - y) > 30.f) { // a swipe
+        const float dx = x - in.touchStartX(), dy = y - in.touchStartY();
+        if (std::abs(dx) > std::abs(dy)) crossCatTo(crossCat() + (dx < 0.f ? 1 : -1));
+        else if (m_crossSystem) m_crossSysSel = std::clamp(m_crossSysSel + (dy < 0.f ? 3 : -3), 0, static_cast<int>(crossSystem().size()) - 1);
+        else if (!games().empty()) select(sel() + (dy < 0.f ? 3 : -3));
+        return true;
+    }
+    if (y < kCrossCatY + 70.f) {
+        const int cat = crossCat() + static_cast<int>(std::lround((x - kCrossX) / kCrossCatStep));
+        crossCatTo(cat);
+        return true;
+    }
+    // Which row: the nearest middle.
+    const int n = m_crossSystem ? static_cast<int>(crossSystem().size()) : static_cast<int>(games().size());
+    const int at = m_crossSystem ? m_crossSysSel : sel();
+    int best = -1;
+    float bestD = 1e9f;
+    for (int i = std::max(0, at - 2); i < std::min(n, at + 7); ++i) {
+        float ry, size, a;
+        crossRow(static_cast<float>(i - at), ry, size, a);
+        if (a > 0.05f && std::abs(ry - y) < bestD) {
+            bestD = std::abs(ry - y);
+            best = i;
+        }
+    }
+    if (best < 0 || bestD > 70.f) return true;
+    if (best == at) {
+        if (m_crossSystem) {
+            auto items = crossSystem();
+            m_audio.play("activation");
+            auto run = items[(size_t)best].run;
+            run();
+        } else {
+            press(1, sel());
+            play();
+        }
+    } else if (m_crossSystem) {
+        m_crossSysSel = best;
+        m_audio.play("navigation");
+    } else {
+        select(best);
     }
     return true;
 }
@@ -11793,7 +12191,11 @@ void CardsActivity::drawCardExtras(nxui::Renderer& r) {
 }
 
 int CardsActivity::launchStyle() const {
-    return m_settings.motion ? std::clamp(m_settings.launchStyle, 0, kLaunchStyles - 1) : kNoAnimation;
+    if (!m_settings.motion) return kNoAnimation;
+    const int style = std::clamp(m_settings.launchStyle, 0, kLaunchStyles - 1);
+    // The cross view has no cards to zoom, flip or rush at you: it fades.
+    if (m_settings.xmbView && (style == kZoom || style == kFlip || style == kDive)) return kFade;
+    return style;
 }
 
 bool CardsActivity::launchDrawsCard() const {

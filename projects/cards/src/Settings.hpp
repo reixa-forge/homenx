@@ -49,6 +49,7 @@ struct Settings {
     bool motion = true;       // animations (off: things move straight to place)
     bool bgMotion = true;     // the background art drifts
     bool gridView = false;    // Y: SwitchU's Wii U grid of icons instead of the card row
+    bool xmbView = false;     // Y's third: the cross view (pages along the top, the page's games in a list)
     int startPage = 0;        // (old: the page order's first is where it opens now)
     std::vector<int> pageOrder = {0, 1, 2, 3}; // the pages in order: 0 games, 1 homebrew, 2 Nintendo, 3 media, then custom pages
     int lastPage = -1; // the custom page something was started from: back there afterwards
@@ -191,6 +192,7 @@ struct Settings {
             motion = j.value("motion", motion);
             bgMotion = j.value("bgMotion", bgMotion);
             gridView = j.value("gridView", gridView);
+            xmbView = j.value("xmbView", xmbView);
             startPage = j.value("startPage", startPage);
             pageOrder = j.value("pageOrder", pageOrder);
             customPages.clear();
@@ -280,7 +282,7 @@ struct Settings {
         if (!readable) return; // (see readable)
         nlohmann::json j = {{"music", music}, {"musicVolume", musicVolume}, {"shuffle", shuffle}, {"repeat", repeat},
                             {"sounds", sounds}, {"soundVolume", soundVolume}, {"players", players},
-                            {"motion", motion}, {"bgMotion", bgMotion}, {"gridView", gridView}, {"startPage", startPage}, {"pageOrder", pageOrder},
+                            {"motion", motion}, {"bgMotion", bgMotion}, {"gridView", gridView}, {"xmbView", xmbView}, {"startPage", startPage}, {"pageOrder", pageOrder},
                             {"sortOrder", sort}, {"haze", haze}, {"boxArt", boxArt}, {"accent", accent},
                             {"glass", glass}, {"launchStyle", launchStyle}, {"clock24", clock24}, {"showFree", showFree}, {"showTemp", showTemp}, {"titlePics", titlePics}, {"mediaIn", mediaIn}, {"mediaOut", mediaOut}, {"gamesIn", gamesIn}, {"gamesOut", gamesOut}, {"fullCards", fullCards}, {"nroHash", nroHash}, {"titles", titles}, {"askUser", askUser}, {"panelApp", panelApp},
                             {"lockScreen", lockScreen}, {"lockMusic", lockMusic}, {"keepHomebrew", keepHomebrew}, {"hbPath", hbPath}, {"hbHost", hbHost}, {"hiddenCards", hiddenCards}, {"sheetBack", sheetBack}, {"sheetBackRow", sheetBackRow}, {"hiddenPages", hiddenPages}, {"spotify", spotify}, {"picturesAt", picturesAt}, {"achSeenAt", achSeenAt},{"introDone", introDone}, {"switchuOrder", switchuOrder}, {"forwardersOnGames", forwardersOnGames}, {"customPagesMove", customPagesMove}, {"wallpaper", wallpaper}, {"names", names},
