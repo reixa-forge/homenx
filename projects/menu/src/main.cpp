@@ -149,23 +149,55 @@ extern "C" void __appInit(void) {
     rc = fsInitialize();
     if (R_FAILED(rc)) diagAbortWithResult(MAKERESULT(Module_Libnx, 501));
 
+    // HomeNX: the SD card and the log first, then each service with a line
+    // before and after it. HOME over a suspended homebrew title stopped in
+    // this block with nothing in menu.log (it was opened after it), so a
+    // stall here never said which service it was waiting on.
+    Result sdRc = fsdevMountSdmc();
+    if (R_FAILED(sdRc)) {
+        svcOutputDebugString("[SwitchU-menu] fsdevMountSdmc FAIL, retry", 42);
+        svcSleepThread(100'000'000ULL);
+        sdRc = fsdevMountSdmc();
+    }
+    switchu::FileLog::open("menu");
+    DebugLog::openFileLog();
+    auto step = [](const char* what) { DebugLog::log("[appinit] %s", what); };
+
+    step("appletInitialize...");
     rc = appletInitialize();
     if (R_FAILED(rc)) {
         svcOutputDebugString("[SwitchU-menu] appletInitialize FAIL", 37);
         diagAbortWithResult(MAKERESULT(Module_Libnx, 502));
     }
+    step("appletInitialize done");
     svcOutputDebugString("[SwitchU-menu] appletInitialize OK", 34);
 
+    step("hidInitialize...");
     rc = hidInitialize();
     if (R_FAILED(rc)) svcOutputDebugString("[SwitchU-menu] hidInitialize FAIL", 33);
+    step("hidInitialize done");
 
+    step("setsysInitialize...");
     setsysInitialize();
+    step("setsysInitialize done");
+    step("setInitialize...");
     setInitialize();
+    step("setInitialize done");
+    step("plInitialize...");
     plInitialize(PlServiceType_System);
+    step("plInitialize done");
+    step("psmInitialize...");
     psmInitialize();
+    step("psmInitialize done");
+    step("lblInitialize...");
     lblInitialize();
+    step("lblInitialize done");
+    step("splInitialize...");
     splInitialize();
+    step("splInitialize done");
+    step("accountInitialize...");
     accountInitialize(AccountServiceType_System);
+    step("accountInitialize done");
 
     {
         SetSysFirmwareVersion fw = {};
@@ -174,17 +206,11 @@ extern "C" void __appInit(void) {
     }
     // Not timeInitialize(): the time service rarely has its 6 sessions free for HOME (see switchu/time_budget.hpp).
     // ClockService tries again if it fails here.
+    step("timebudget::poll...");
     switchu::timebudget::poll();
+    step("timebudget::poll done");
 
-    rc = fsdevMountSdmc();
-    if (R_FAILED(rc)) {
-        svcOutputDebugString("[SwitchU-menu] fsdevMountSdmc FAIL, retry", 42);
-        svcSleepThread(100'000'000ULL);
-        rc = fsdevMountSdmc();
-    }
-
-    switchu::FileLog::open("menu");
-    DebugLog::openFileLog();
+    rc = sdRc;
     DebugLog::log("[menu] __appInit complete (sd mount: 0x%X)", rc);
 
     rc = nsInitialize();
