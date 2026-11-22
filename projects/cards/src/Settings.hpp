@@ -21,6 +21,9 @@ struct CustomPage {
     // own page while they're here. Always a part of `titles`. When the page
     // goes (or is hidden) they're back on their own pages, as they were.
     std::vector<std::string> moved;
+    // Made from the games' genres (Settings > Home > Genre pages): kept up to
+    // date on its own, and taken away when that's turned off.
+    bool genre = false;
 };
 
 // Writes `data` to `path` on CardsNX's writer thread (Library.cpp): the
@@ -94,6 +97,8 @@ struct Settings {
     std::vector<std::string> favourites; // starred with + (ids, hex): first on the Games page, whatever the sort
     bool nextendoAlerts = true;  // a notice when people come online in a game he has (Nextendo)
     bool playersMine = false;    // the players list: only games on the console
+    bool genrePages = false;     // a page for each genre with 2+ of his games (as custom pages, made and kept up to date)
+    int accentR = 100, accentG = 45, accentB = 45; // Highlight colour > Custom (each 0-100%)
     std::map<std::string, std::string> names; // + > Rename: by title ID (hex) or .nro path
     std::vector<std::string> sheetOrder; // Settings' tabs by name, in his order (new ones after)
     std::string user;         // who games start as (hex), "" = the last one who played
@@ -211,6 +216,7 @@ struct Settings {
                             if (id.is_string() && std::find(custom.titles.begin(), custom.titles.end(), id.get<std::string>()) != custom.titles.end()
                                 && std::find(custom.moved.begin(), custom.moved.end(), id.get<std::string>()) == custom.moved.end())
                                 custom.moved.push_back(id.get<std::string>());
+                    custom.genre = page.value("genre", false);
                     customPages.push_back(std::move(custom));
                     if (customPages.size() == kMaxCustomPages) break;
                 }
@@ -259,6 +265,10 @@ struct Settings {
             favourites = j.value("favourites", favourites);
             nextendoAlerts = j.value("nextendoAlerts", nextendoAlerts);
             playersMine = j.value("playersMine", playersMine);
+            genrePages = j.value("genrePages", genrePages);
+            accentR = std::clamp(j.value("accentR", accentR), 0, 100);
+            accentG = std::clamp(j.value("accentG", accentG), 0, 100);
+            accentB = std::clamp(j.value("accentB", accentB), 0, 100);
             names = j.value("names", names);
             sheetOrder = j.value("sheetOrder", sheetOrder);
             user = j.value("user", user);
@@ -280,6 +290,11 @@ struct Settings {
 
     void save() const {
         if (!readable) return; // (see readable)
+        writeLater(kPath, text());
+    }
+
+    // The settings as the file has them (save; a backup).
+    std::string text() const {
         nlohmann::json j = {{"music", music}, {"musicVolume", musicVolume}, {"shuffle", shuffle}, {"repeat", repeat},
                             {"sounds", sounds}, {"soundVolume", soundVolume}, {"players", players},
                             {"motion", motion}, {"bgMotion", bgMotion}, {"gridView", gridView}, {"xmbView", xmbView}, {"startPage", startPage}, {"pageOrder", pageOrder},
@@ -290,17 +305,25 @@ struct Settings {
                             {"orderGames", order[0]}, {"orderHomebrew", order[1]}, {"orderNintendo", order[2]},
                             {"orderMedia", order[3]}};
         j["customPages"] = nlohmann::json::array();
-        for (const auto& page : customPages) j["customPages"].push_back({{"name", page.name}, {"titles", page.titles}, {"moved", page.moved}});
+        for (const auto& page : customPages) {
+            nlohmann::json p = {{"name", page.name}, {"titles", page.titles}, {"moved", page.moved}};
+            if (page.genre) p["genre"] = true;
+            j["customPages"].push_back(std::move(p));
+        }
         j["notificationCards"] = notificationCards;
         j["favourites"] = favourites;
         j["nextendoAlerts"] = nextendoAlerts;
         j["playersMine"] = playersMine;
+        j["genrePages"] = genrePages;
+        j["accentR"] = accentR;
+        j["accentG"] = accentG;
+        j["accentB"] = accentB;
         j["lastPage"] = lastPage;
         j["lockGameBanner"] = lockGameBanner;
         j["lockGameTitle"] = lockGameTitle;
         j["gameCardDisplay"] = gameCardDisplay;
         j["gameCardIcons"] = gameCardIcons;
-        writeLater(kPath, j.dump(2));
+        return j.dump(2);
     }
 };
 

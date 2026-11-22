@@ -295,6 +295,14 @@ private:
     void searchGames();                    // a name typed: the games with it, to jump to
     void jumpTo(int page, int index);      // that page, that game chosen
     void checkNextendoAlerts();            // people came online in a game he has: a notice
+    void surpriseMe();                     // a game picked at random: chosen, to start with A
+    void eraseCustomPage(int page);        // (its place in your order, hidden, the page shown: all kept right)
+    void syncGenrePages();                 // Settings > Home > Genre pages: made, updated or taken away
+    // Backups: sdmc:/config/CardsNX/backups/<date>/ (settings, genres, the game lists).
+    bool backupNow(bool quiet);
+    void autoBackup();                     // a week since the last: another
+    void openBackups();                    // Settings > About > Backups
+    void restoreBackup(const std::string& dir);
     void askGenres();                      // the Games page's games with no genre yet: to worker 0
     void selectById(std::uint64_t id); // its page and card, straight away
     std::uint64_t m_backTo = 0;        // back from this game: it stays chosen until you move

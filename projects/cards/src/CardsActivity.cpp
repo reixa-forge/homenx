@@ -162,6 +162,12 @@ const Accent kAccents[] = {
     {"Green", nxui::Color(0.30f, 0.86f, 0.47f, 1.f)}, {"Pink", nxui::Color(1.f, 0.46f, 0.72f, 1.f)},
     {"Orange", nxui::Color(1.f, 0.63f, 0.26f, 1.f)},  {"Purple", nxui::Color(0.72f, 0.55f, 1.f, 1.f)},
     {"Gold", nxui::Color(1.f, 0.84f, 0.36f, 1.f)},
+    {"Crimson", nxui::Color(1.f, 0.33f, 0.33f, 1.f)},     {"Teal", nxui::Color(0.2f, 0.8f, 0.78f, 1.f)},
+    {"Cyan", nxui::Color(0.35f, 0.88f, 1.f, 1.f)},    {"Lime", nxui::Color(0.7f, 0.95f, 0.3f, 1.f)},
+    {"Coral", nxui::Color(1.f, 0.55f, 0.45f, 1.f)},   {"Lavender", nxui::Color(0.78f, 0.72f, 1.f, 1.f)},
+    {"Mint", nxui::Color(0.55f, 1.f, 0.8f, 1.f)},     {"Neon red", nxui::Color(1.f, 0.24f, 0.33f, 1.f)},
+    {"Neon blue", nxui::Color(0.f, 0.75f, 0.9f, 1.f)},
+    {"Custom", nxui::Color(1.f, 1.f, 1.f, 1.f)}, // (Settings' red, green and blue: always the last)
 };
 constexpr int kAccentCount = sizeof(kAccents) / sizeof(kAccents[0]);
 const char* const kGlassNames[] = {"Clear", "Frosted", "Dark"};
@@ -174,6 +180,18 @@ constexpr float kLaunchPace[] = {0.85f, 1.1f, 1.f, 0.95f, 0.8f, 0.15f};
 constexpr const char* kBrowseNxUrl = "https://github.com/ad3333m/browsenx/releases/download/latest/BrowseNX.nro";
 constexpr const char* kBrowseNxPath = "sdmc:/switch/BrowseNX/BrowseNX.nro";
 constexpr const char* kToggle = "sdmc:/switch/NXToggle/NXToggle.nro";
+
+constexpr const char* kBackups = "sdmc:/config/CardsNX/backups"; // Settings > About > Backups
+// The backups there are, newest first (their folders are named by date).
+std::vector<std::string> listBackups() {
+    std::vector<std::string> out;
+    std::error_code ec;
+    for (std::filesystem::directory_iterator it(kBackups, ec), end; !ec && it != end; it.increment(ec))
+        if (it->is_directory(ec) && std::filesystem::exists(it->path() / "settings.json", ec))
+            out.push_back(it->path().filename().string());
+    std::sort(out.rbegin(), out.rend());
+    return out;
+}
 
 class Painter final : public nxui::Widget {
 public:
@@ -726,7 +744,12 @@ bool CardsActivity::onCreate() {
     applyOrder(kNintendo);
     rebuildCustomPages();
     if (m_settings.startedFresh)
-        say("Your settings file was damaged, so CardsNX started fresh. The old one is config/CardsNX/settings.json.bad.");
+        say(listBackups().empty()
+                ? "Your settings file was damaged, so CardsNX started fresh. The old one is config/CardsNX/settings.json.bad."
+                : "Your settings file was damaged, so CardsNX started fresh. Put a backup back in Settings > About > Backups.");
+    else
+        autoBackup();
+    if (m_settings.genrePages) askGenres(); // (the genre pages: kept up to date as they come)
 
     // You: the one chosen in the pill, else the last account that played, else the first.
     AccountUidLike chosen;
@@ -1080,7 +1103,11 @@ void CardsActivity::applyTheme() {
 }
 
 nxui::Color CardsActivity::accent(float a) const {
-    return kAccents[std::clamp(m_settings.accent, 0, kAccentCount - 1)].color.withAlpha(a);
+    const int i = std::clamp(m_settings.accent, 0, kAccentCount - 1);
+    if (i == kAccentCount - 1) // Custom
+        return nxui::Color(static_cast<float>(m_settings.accentR) / 100.f, static_cast<float>(m_settings.accentG) / 100.f,
+                           static_cast<float>(m_settings.accentB) / 100.f, a);
+    return kAccents[i].color.withAlpha(a);
 }
 
 // White text on the accent vanished with the light accents (White, the
@@ -1739,6 +1766,7 @@ void CardsActivity::takeArt() {
     bool roomFreed = false;
     bool resortLater = false; // (new counts or genres for the sort chosen: after the lock)
     bool alertsLater = false;  // (live counts: any of his games just came online? notifyCard locks m_mu)
+    bool genresLater = false;  // (new genres: the genre pages again)
     {
         std::lock_guard<std::mutex> lk(m_mu);
         const size_t n = std::min<size_t>(8, m_done.size()); // up to 8 a frame, 4 ms at most (below); 3 kept a page of grid icons waiting
@@ -1767,6 +1795,7 @@ void CardsActivity::takeArt() {
             m_genresIn.clear();
             m_genresFresh = false;
             if (m_settings.sort == 5) resortLater = true;
+            genresLater = m_settings.genrePages;
         }
         if (m_statusFresh) {
             m_statusFresh = false;
@@ -1795,6 +1824,7 @@ void CardsActivity::takeArt() {
     // chosen stays chosen). Not while a game is being moved.
     if (resortLater && !m_moving && (m_settings.sort == 4 || m_settings.sort == 5)) sortGames(m_settings.sort);
     if (alertsLater) checkNextendoAlerts();
+    if (genresLater && !m_moving) syncGenrePages();
     const Game* cur = current();
     const std::uint64_t selected = cur ? cur->id : 0;
     const std::uint64_t until = armGetSystemTick() + armNsToTicks(4'000'000ULL);
@@ -2234,6 +2264,7 @@ void CardsActivity::toggleFavourite(const Game& game) {
 void CardsActivity::jumpTo(int page, int index) {
     m_menu.clear();
     m_zone = Zone::Cards;
+    m_crossSystem = false;
     if (page != m_page) {
         m_sels[page] = index; // goToPage reads the selection after the page changes
         goToPage(page, 0);
@@ -5622,6 +5653,7 @@ void CardsActivity::openDots() {
     m_dotsTiles.push_back({"Users", "friends", nxui::Color(1.f, 0.6f, 0.2f, 1.f), [this]() { openUsers(); }});
     m_dotsTiles.push_back({"Pages", "copy", nxui::Color(0.36f, 0.68f, 1.f, 1.f), [this]() { openPagePicker(); }});
     m_dotsTiles.push_back({"Search", "search", nxui::Color(0.3f, 0.75f, 0.85f, 1.f), [this]() { searchGames(); }});
+    m_dotsTiles.push_back({"Surprise me", "shuffle", nxui::Color(1.f, 0.55f, 0.35f, 1.f), [this]() { surpriseMe(); }});
     m_dotsTiles.push_back({"Music", "music", nxui::Color(0.95f, 0.35f, 0.6f, 1.f), [this]() { openMusic(); }});
     m_dotsTiles.push_back({"Quick", "sun", nxui::Color(1.f, 0.78f, 0.25f, 1.f), [this]() { openQuick(); }});
     m_dotsTiles.push_back({"Updates", "sort", nxui::Color(0.25f, 0.8f, 0.5f, 1.f), [this]() { openHomebrewUpdates(); }});
@@ -6882,6 +6914,16 @@ void CardsActivity::buildSettings() {
             m_settings.customPagesMove = !m_settings.customPagesMove;
             save();
         }, "On: + moves a game onto a custom page, off its own page (no copies). Deleting the page puts it back. Off: + adds a copy"));
+    home.rows.push_back(toggle("Genre pages", [this]() { return m_settings.genrePages; },
+        [this, save]() {
+            m_settings.genrePages = !m_settings.genrePages;
+            save();
+            if (m_settings.genrePages) {
+                askGenres(); // (the pages come as the genres do)
+                say("Genre pages are on: they appear as each game's genre is found.");
+            }
+            syncGenrePages();
+        }, "A page for each genre you have 2 or more games of (Action, RPG...), kept up to date. Up to 6, next to your own pages"));
     home.rows.push_back(choice("Sort games", [this]() { return std::string(kSortNames[m_settings.sort]); },
         [this, save](int d) {
             int at = 0;
@@ -6959,6 +7001,18 @@ void CardsActivity::buildSettings() {
             save();
         },
         "The ring around what's chosen"));
+    // Custom: any colour, from three sliders (moving one picks Custom).
+    auto channel = [this, save](const char* name, int Settings::*field) {
+        return slider(name, [this, field]() { return m_settings.*field; }, [this, save, field](int v) {
+            m_settings.*field = v;
+            m_settings.accent = kAccentCount - 1;
+            applyTheme();
+            save();
+        }, "Highlight colour: Custom");
+    };
+    look.rows.push_back(channel("Custom colour: red", &Settings::accentR));
+    look.rows.push_back(channel("Custom colour: green", &Settings::accentG));
+    look.rows.push_back(channel("Custom colour: blue", &Settings::accentB));
     look.rows.push_back(choice("Launch animation",
         [this]() { return std::string(kLaunchNames[std::clamp(m_settings.launchStyle, 0, kLaunchStyles - 1)]); },
         [this, save](int d) {
@@ -7516,6 +7570,8 @@ void CardsActivity::buildSettings() {
     });
     tabs.detail = "The tabs on the left of Settings, in the order you like";
     about.rows.push_back(std::move(tabs));
+    about.rows.push_back(action("Backups", [this]() { m_sheetOpen = false; openBackups(); }));
+    about.rows.back().detail = "Your settings, pages, order and favourites: kept weekly (5 kept), or now; put one back";
     about.rows.push_back(toggle("Performance log", [this]() { return m_settings.perfLog; }, [this]() {
         m_settings.perfLog = !m_settings.perfLog;
         m_settings.save();
@@ -11054,6 +11110,213 @@ bool CardsActivity::cardRectAt(int index, nxui::Rect& card, float& chosen) {
 
 // ---------------------------------------------------------------- the cross view
 
+// A game picked at random from the Games page (any game: not the one chosen
+// now, nor a running one), chosen for him; A starts it.
+void CardsActivity::surpriseMe() {
+    const int page = pageHidden(kGames) ? m_page : kGames;
+    const auto& list = pageGames(page);
+    std::vector<int> pick;
+    for (size_t i = 0; i < list.size(); ++i) {
+        const Game& g = list[i];
+        if (!g.action.empty() || isRunning(g.id)) continue;
+        if (page == m_page && static_cast<int>(i) == sel() && list.size() > 1) continue;
+        pick.push_back(static_cast<int>(i));
+    }
+    if (pick.empty()) {
+        say("There's no game to pick from.");
+        return;
+    }
+    static std::uint64_t seed = armGetSystemTick();
+    seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+    const int index = pick[static_cast<size_t>((seed >> 33) % pick.size())];
+    jumpTo(page, index);
+    m_audio.play("tab_transition");
+    say(trf("How about {game}? Press A to play.", {list[(size_t)index].name}));
+}
+
+// A custom page taken away: the pages after it move down one, in your order,
+// the hidden ones and the one shown.
+void CardsActivity::eraseCustomPage(int page) {
+    if (page < kPageCount || page >= pageCount()) return;
+    m_settings.customPages.erase(m_settings.customPages.begin() + page - kPageCount);
+    for (auto* list : {&m_settings.pageOrder, &m_settings.hiddenPages}) {
+        list->erase(std::remove(list->begin(), list->end(), page), list->end());
+        for (int& id : *list) if (id > page) --id;
+    }
+    for (int p = page; p + 1 < Settings::kMaxPages; ++p) m_sels[p] = m_sels[p + 1];
+    if (m_page == page) m_page = kGames;
+    else if (m_page > page) --m_page;
+}
+
+// Genre pages: one for each genre with 2 or more of his games (the Games
+// page's, by nlib.cc's genres), biggest first, as many as there's room for
+// next to his own pages (8 in all; 6 genres at most). Off: all taken away.
+void CardsActivity::syncGenrePages() {
+    std::vector<std::pair<std::string, std::vector<std::string>>> want;
+    if (m_settings.genrePages) {
+        std::map<std::string, std::vector<std::string>> by;
+        for (const Game& g : m_pages[kGames]) {
+            if (!g.id || g.homebrew) continue;
+            const auto it = m_genres.find(g.id);
+            if (it != m_genres.end() && !it->second.empty()) by[it->second].push_back(idText(g.id));
+        }
+        for (auto& [name, ids] : by)
+            if (ids.size() >= 2) want.emplace_back(name, std::move(ids));
+        std::stable_sort(want.begin(), want.end(), [](const auto& a, const auto& b) { return a.second.size() > b.second.size(); });
+        int own = 0;
+        for (const CustomPage& p : m_settings.customPages) own += p.genre ? 0 : 1;
+        const int room = std::min(6, static_cast<int>(Settings::kMaxCustomPages) - own);
+        if (static_cast<int>(want.size()) > room) want.resize(static_cast<size_t>(std::max(0, room)));
+    }
+    bool changed = false;
+    LibraryEdit edit(*this);
+    for (int i = static_cast<int>(m_settings.customPages.size()) - 1; i >= 0; --i) { // gone: taken away
+        const CustomPage& p = m_settings.customPages[(size_t)i];
+        if (!p.genre) continue;
+        const bool kept = std::any_of(want.begin(), want.end(), [&](const auto& w) { return w.first == p.name; });
+        if (!kept) {
+            eraseCustomPage(kPageCount + i);
+            changed = true;
+        }
+    }
+    for (auto& [name, ids] : want) {
+        auto it = std::find_if(m_settings.customPages.begin(), m_settings.customPages.end(),
+                               [&](const CustomPage& p) { return p.genre && p.name == name; });
+        if (it == m_settings.customPages.end()) {
+            if (m_settings.customPages.size() >= Settings::kMaxCustomPages) break;
+            CustomPage page;
+            page.name = name;
+            page.titles = ids;
+            page.genre = true;
+            m_settings.customPages.push_back(std::move(page));
+            changed = true;
+        } else if (it->titles != ids) {
+            it->titles = ids;
+            changed = true;
+        }
+    }
+    if (!changed) return;
+    m_settings.normalizePages();
+    m_settings.save();
+    rebuildCustomPages();
+    requeueArt();
+}
+
+// ---------------------------------------------------------------- backups
+
+namespace {
+// What a backup keeps besides the settings (not spotify.json: a sign-in).
+const char* const kBackupFiles[] = {"genres.json", "lists.json"};
+
+bool copyFile(const std::string& from, const std::string& to) {
+    std::ifstream in(from, std::ios::binary);
+    if (!in) return false;
+    std::ofstream out(to + ".tmp", std::ios::binary | std::ios::trunc);
+    out << in.rdbuf();
+    out.close();
+    if (!out) return false;
+    std::error_code ec;
+    std::filesystem::remove(to, ec);
+    std::filesystem::rename(to + ".tmp", to, ec);
+    return !ec;
+}
+
+} // namespace
+
+
+bool CardsActivity::backupNow(bool quiet) {
+    if (!m_settings.readable) return false; // (nothing of his to keep)
+    const std::time_t now = std::time(nullptr);
+    char name[32];
+    std::strftime(name, sizeof(name), "%Y-%m-%d_%H%M%S", std::localtime(&now));
+    const std::string dir = std::string(kBackups) + "/" + name;
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    bool ok = !ec;
+    if (ok) {
+        std::ofstream f(dir + "/settings.json", std::ios::binary | std::ios::trunc);
+        f << m_settings.text();
+        ok = static_cast<bool>(f);
+    }
+    for (const char* file : kBackupFiles) copyFile(std::string("sdmc:/config/CardsNX/") + file, dir + "/" + file);
+    // The 5 newest kept.
+    auto all = listBackups();
+    for (size_t i = 5; i < all.size(); ++i) std::filesystem::remove_all(std::string(kBackups) + "/" + all[i], ec);
+    if (!quiet) say(ok ? "Backed up: config/CardsNX/backups." : "The backup couldn't be written to the SD card.");
+    return ok;
+}
+
+void CardsActivity::autoBackup() {
+    if (!m_settings.readable || m_settings.startedFresh) return; // (a damaged start: the old backups are what's wanted)
+    const auto all = listBackups();
+    if (!all.empty()) {
+        std::tm t{};
+        if (std::sscanf(all.front().c_str(), "%d-%d-%d", &t.tm_year, &t.tm_mon, &t.tm_mday) == 3) {
+            t.tm_year -= 1900;
+            t.tm_mon -= 1;
+            const std::time_t at = std::mktime(&t);
+            if (at > 0 && std::time(nullptr) - at < 7 * 24 * 3600) return;
+        }
+    }
+    backupNow(true);
+}
+
+void CardsActivity::openBackups() {
+    std::vector<MenuItem> items;
+    items.push_back(action("Back up now", [this]() { backupNow(false); }));
+    items.back().glyph = "download";
+    for (const std::string& dir : listBackups()) {
+        std::string label = dir; // 2026-11-22_164000 -> 2026-11-22 16:40
+        if (label.size() >= 15 && label[10] == '_') label = label.substr(0, 10) + "  " + label.substr(11, 2) + ":" + label.substr(13, 2);
+        items.push_back(action(trf("Restore {date}", {label}), [this, dir, label]() {
+            openMenu(trf("Put back the settings from {date}? Your settings now are backed up first.", {label}),
+                     {action("Restore", [this, dir]() { restoreBackup(dir); }, true), action("Cancel", [] {})});
+        }));
+        items.back().glyph = "restart";
+    }
+    if (items.size() == 1) items.push_back(info("No backups yet.", []() { return std::string(); }));
+    items.push_back(action("Back", [] {}));
+    openMenu("Backups", std::move(items));
+}
+
+// Put back: his settings now are backed up first (to undo it); then the
+// backup's settings are read in place (as settings.restore.json is at a start)
+// and everything shown is made again from them.
+void CardsActivity::restoreBackup(const std::string& dir) {
+    const std::string from = std::string(kBackups) + "/" + dir;
+    if (!std::filesystem::exists(from + "/settings.json")) {
+        say("That backup isn't there any more.");
+        return;
+    }
+    if (!m_settings.startedFresh) backupNow(true);
+    for (const char* file : kBackupFiles)
+        if (std::filesystem::exists(from + "/" + file)) copyFile(from + "/" + file, std::string("sdmc:/config/CardsNX/") + file);
+    if (!copyFile(from + "/settings.json", Settings::kRestore)) {
+        say("The backup couldn't be read.");
+        return;
+    }
+    {
+        LibraryEdit edit(*this);
+        m_settings.load(); // (reads settings.restore.json, saves it as settings.json, removes it)
+        m_settings.startedFresh = false;
+        m_favDirty = true;
+        auto genres = loadGenres();
+        for (auto& [id, g] : genres) m_genres[id] = std::move(g);
+        applyNames();
+        applyOrder(kHomebrew);
+        applyOrder(kNintendo);
+        rebuildCustomPages();
+    }
+    sortGames(m_settings.sort, false);
+    applyTheme();
+    if (m_page >= pageCount() || pageHidden(m_page)) goToPage(firstShownPage());
+    requeueArt();
+    m_sheetOpen = false; // (Settings shows the old values: closed)
+    m_sheet.clear();
+    m_audio.play("toggle_on");
+    say("Settings restored. A new language shows after a restart.");
+}
+
 // Y: the cards, the grid, the cross view, and round again.
 void CardsActivity::cycleView() {
     if (m_settings.xmbView) {
@@ -11125,6 +11388,7 @@ std::vector<CardsActivity::CrossItem> CardsActivity::crossSystem() {
     std::vector<CrossItem> items;
     items.push_back({"Settings", "gear", nullptr, [this]() { openSettings(); }});
     items.push_back({"Search games", "search", nullptr, [this]() { searchGames(); }});
+    items.push_back({"Surprise me", "shuffle", nullptr, [this]() { surpriseMe(); }});
     items.push_back({"Sort games", "sort", [this]() { return tr(kSortNames[std::clamp(m_settings.sort, 0, kSorts - 1)]); },
                      [this]() { activateTop(kTopSort); }});
     if (m_settings.players)
@@ -11290,7 +11554,7 @@ void CardsActivity::drawCross(nxui::Renderer& r) {
         if (a <= 0.01f) continue;
         const float size = 52.f + 16.f * near;
         if (near > 0.01f)
-            r.drawCircle({x, kCrossCatY}, size * 0.62f, nxui::Color(1.f, 1.f, 1.f, 0.10f * near * a), 32);
+            r.drawCircle({x, kCrossCatY}, size * 0.62f, accent(0.16f * near * a), 32);
         icon(r, catGlyph(i), x, kCrossCatY, size * 0.6f, kWhite.withAlpha(a));
         const std::string name = i >= static_cast<int>(pages.size()) ? tr("System") : pageName(pages[(size_t)i]);
         const float w = measured(m_fLabel, name).x * (0.82f + 0.18f * near);
@@ -11308,7 +11572,7 @@ void CardsActivity::drawCross(nxui::Renderer& r) {
             if (a <= 0.01f || y < 230.f || y > 760.f) continue;
             const bool chosen = static_cast<int>(i) == m_crossSysSel;
             const float s = size * 0.55f;
-            r.drawCircle({kCrossX + listDx, y}, s * 0.75f, nxui::Color(1.f, 1.f, 1.f, (chosen ? 0.16f : 0.07f) * a), 32);
+            r.drawCircle({kCrossX + listDx, y}, s * 0.75f, chosen ? accent(0.3f * a) : nxui::Color(1.f, 1.f, 1.f, 0.07f * a), 32);
             icon(r, items[i].glyph.c_str(), kCrossX + listDx, y, s * 0.6f, kWhite.withAlpha(a));
             textMid(r, chosen ? m_fTitle : m_fLabel, items[i].label, textX, y - (items[i].value ? 12.f : 0.f), kWhite.withAlpha(a));
             if (items[i].value) {
@@ -11341,8 +11605,10 @@ void CardsActivity::drawCross(nxui::Renderer& r) {
             else if (it->second.icon && it->second.icon->valid()) tex = it->second.icon.get();
         }
         if (chosen) // a soft glow behind the chosen one
-            r.drawRoundedRect({box.x - 6.f, box.y - 6.f, box.width + 12.f, box.height + 12.f},
-                              nxui::Color(1.f, 1.f, 1.f, 0.10f * a), 18.f);
+        {
+            r.drawRoundedRect({box.x - 6.f, box.y - 6.f, box.width + 12.f, box.height + 12.f}, accent(0.14f * a), 18.f);
+            r.drawRoundedRectOutline({box.x - 6.f, box.y - 6.f, box.width + 12.f, box.height + 12.f}, accent(0.8f * a), 18.f, 2.5f);
+        }
         if (tex) {
             r.drawTextureRounded(tex, box, 12.f * size / 128.f, kWhite.withAlpha(a));
         } else {
@@ -13094,6 +13360,7 @@ void CardsActivity::openCustomPages() {
             });
         }));
     for (int page = kPageCount; page < pageCount(); ++page) {
+        if (m_settings.customPages[page - kPageCount].genre) continue; // (Settings > Home > Genre pages has those)
         items.push_back(action(pageName(page), [this, page]() { editCustomPage(page); }));
         items.back().detail = trf("{n} games and apps", {std::to_string(m_pages[page].size())});
     }
@@ -13125,13 +13392,7 @@ void CardsActivity::editCustomPage(int page) {
                     if (page >= pageCount()) return;
                     LibraryEdit edit(*this); // (shown again without it: its moved games back on their pages)
                     const bool hadMoved = !m_settings.customPages[page - kPageCount].moved.empty();
-                    m_settings.customPages.erase(m_settings.customPages.begin() + page - kPageCount);
-                    for (auto* list : {&m_settings.pageOrder, &m_settings.hiddenPages}) {
-                        list->erase(std::remove(list->begin(), list->end(), page), list->end());
-                        for (int& id : *list) if (id > page) --id;
-                    }
-                    if (m_page == page) m_page = kGames;
-                    else if (m_page > page) --m_page;
+                    eraseCustomPage(page);
                     m_settings.normalizePages();
                     m_settings.save();
                     rebuildCustomPages();
@@ -13149,6 +13410,7 @@ void CardsActivity::addToCustomPage(const Game& game) {
     const bool move = m_settings.customPagesMove;
     std::vector<MenuItem> items;
     for (int page = kPageCount; page < pageCount(); ++page)
+        if (!m_settings.customPages[page - kPageCount].genre) // (made from genres: they'd be undone)
         items.push_back(action(pageName(page), [this, page, game, move]() {
             LibraryEdit edit(*this);
             const std::string id = idText(game.id);
