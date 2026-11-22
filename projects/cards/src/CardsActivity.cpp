@@ -63,8 +63,7 @@ const nxui::Rect kPanel{186.f, 503.f, 907.f, 207.f};
 // Y's grid: SwitchU's (WiiUMenuApp / IconGrid / GlossyIcon / SelectionCursor
 // with the Default Dark theme). Its grid rect {0, 90, 1280, 540} holds 5 x 3
 // cells of 150, 20 / 16 apart, centred: the origin is (225, 119).
-constexpr float kGridCell = 150.f, kGridPadX = 20.f, kGridPadY = 16.f;
-constexpr float kGridOriginX = 225.f, kGridOriginY = 119.f, kGridStride = 1280.f;
+constexpr float kGridStride = 1280.f; // (the rest of the layout: m_grid*, Settings > Grid view > Layout)
 constexpr float kGridIconRadius = 24.f, kGridCursorRadius = 26.f, kGridCursorBorder = 3.f;
 constexpr float kGridSlideSec = 0.34f, kGridBumpPx = 26.f;
 constexpr float kGridPillY = 630.f, kGridDotsY = 685.f, kGridDotsH = 28.f;
@@ -749,7 +748,8 @@ bool CardsActivity::onCreate() {
                 : "Your settings file was damaged, so CardsNX started fresh. Put a backup back in Settings > About > Backups.");
     else
         autoBackup();
-    if (m_settings.genrePages) askGenres(); // (the genre pages: kept up to date as they come)
+    applyGridLayout();
+    askGenres(); // the eShop's facts for every game, once each (kept): genres, the details panel
 
     // You: the one chosen in the pill, else the last account that played, else the first.
     AccountUidLike chosen;
@@ -1103,7 +1103,47 @@ void CardsActivity::applyTheme() {
 }
 
 nxui::Color CardsActivity::gridCursor(float a) const {
-    return m_settings.accent == 0 ? kSuCursor.withAlpha(a) : accent(a);
+    const int mode = m_settings.gridCursorColour;
+    if (mode == 1 || (mode == 0 && m_settings.accent == 0)) return kSuCursor.withAlpha(a);
+    return accent(a);
+}
+
+// Settings > Grid view > Layout: columns and rows, the tiles sized to fit and
+// the whole centred where SwitchU's 5x3 is.
+void CardsActivity::applyGridLayout() {
+    struct L { int cols, rows; float cell, padX, padY; };
+    static const L kLayouts[] = {{5, 3, 150.f, 20.f, 16.f}, {4, 3, 150.f, 24.f, 16.f}, {4, 2, 190.f, 28.f, 24.f}, {6, 4, 112.f, 16.f, 10.f}};
+    const L& l = kLayouts[std::clamp(m_settings.gridLayout, 0, 3)];
+    m_gridCols = l.cols;
+    m_gridRows = l.rows;
+    m_gridPer = l.cols * l.rows;
+    m_gridCell = l.cell;
+    m_gridPadX = l.padX;
+    m_gridPadY = l.padY;
+    const float w = static_cast<float>(l.cols) * l.cell + static_cast<float>(l.cols - 1) * l.padX;
+    const float h = static_cast<float>(l.rows) * l.cell + static_cast<float>(l.rows - 1) * l.padY;
+    m_gridOriginX = std::floor((1280.f - w) * 0.5f);
+    m_gridOriginY = std::floor(119.f + (482.f - h) * 0.5f);
+    m_gridShown = m_gridFrom = std::max(0, sel()) / m_gridPer;
+    m_gridSlideT = 1.f;
+    m_gridDrag = m_gridBump = 0.f;
+    m_curInit = false;
+    m_pillShown.clear();
+}
+
+const nxui::Texture* CardsActivity::customIcon(const std::string& key) {
+    if (const auto it = m_customIconTex.find(key); it != m_customIconTex.end()) return it->second.get();
+    if (m_customIconNone.count(key)) return nullptr;
+    const std::string file = customIconFile(key);
+    if (!file.empty()) {
+        std::ifstream in(file, std::ios::binary);
+        std::vector<std::uint8_t> data((std::istreambuf_iterator<char>(in)), {});
+        auto tex = std::make_unique<nxui::Texture>();
+        if (!data.empty() && tex->loadFromMemory(app().gpu(), app().renderer(), data.data(), data.size(), 128))
+            return (m_customIconTex[key] = std::move(tex)).get();
+    }
+    m_customIconNone.insert(key);
+    return nullptr;
 }
 
 nxui::Color CardsActivity::accent(float a) const {
@@ -1211,7 +1251,11 @@ void CardsActivity::worker(int index) {
             std::vector<NextendoGame> games;
             const bool cached = loadNextendoCache(counts, games, 6 * 3600);
             auto genres = loadGenres();
+            auto infos = loadGameInfos();
+            for (const auto& [id, i] : infos)
+                if (!i.genres.empty()) genres[id] = i.genres.front();
             std::lock_guard<std::mutex> lk(m_mu);
+            for (auto& [id, i] : infos) m_infosIn[id] = std::move(i);
             if (cached && !m_playersFresh) {
                 m_playersIn = std::move(counts);
                 m_nextendoIn = std::move(games);
@@ -1407,21 +1451,36 @@ void CardsActivity::worker(int index) {
                     }
                 }
                 if (!ask.empty()) {
-                    static std::map<std::uint64_t, std::string> known = loadGenres(); // (this worker's, to save)
-                    std::map<std::uint64_t, std::string> got;
+                    // The eShop's facts (genre, publisher, release, description...),
+                    // asked once a game and kept: one known (or known not listed)
+                    // is never asked again.
+                    static std::map<std::uint64_t, GameInfo> known = loadGameInfos(); // (this worker's, to save)
+                    static std::map<std::uint64_t, std::string> knownGenres = loadGenres();
+                    std::map<std::uint64_t, GameInfo> got;
+                    bool fetched = false;
                     for (std::uint64_t id : ask) {
-                        if (known.count(id)) { // (on the SD card already: asked before the card was read)
-                            got[id] = known[id];
+                        if (const auto it = known.find(id); it != known.end()) {
+                            got[id] = it->second;
                             continue;
                         }
-                        std::string genre;
-                        if (gameGenre(id, genre)) got[id] = genre;
+                        GameInfo info;
+                        if (fetchGameInfo(id, info)) {
+                            got[id] = info;
+                            known[id] = std::move(info);
+                            fetched = true;
+                        }
+                    }
+                    if (fetched) {
+                        for (const auto& [id, i] : got) knownGenres[id] = i.genres.empty() ? std::string() : i.genres.front();
+                        saveGameInfos(known);
+                        saveGenres(knownGenres); // (kept too: a backup has it)
                     }
                     if (!got.empty()) {
-                        for (const auto& [id, g] : got) known[id] = g;
-                        saveGenres(known);
                         std::lock_guard<std::mutex> lk(m_mu);
-                        for (auto& [id, g] : got) m_genresIn[id] = std::move(g);
+                        for (auto& [id, i] : got) {
+                            m_genresIn[id] = i.genres.empty() ? std::string() : i.genres.front();
+                            m_infosIn[id] = std::move(i);
+                        }
                         m_genresFresh = true;
                     }
                     continue; // (more right away, if there are)
@@ -1484,7 +1543,12 @@ void CardsActivity::worker(int index) {
             // The console's own icon (HomeNX keeps it from the title's control
             // data); a Nintendo page entry's picture; a .nro's own icon.
             done.kind = ArtKind::Icon;
-            if (!job.game.action.empty()) {
+            if (const std::string mine = customIconFile(customIconKey(job.game)); !mine.empty()) { // + > Icon picture
+                std::ifstream in(mine, std::ios::binary);
+                data.assign(std::istreambuf_iterator<char>(in), {});
+            }
+            if (!data.empty()) {
+            } else if (!job.game.action.empty()) {
                 std::ifstream in(systemIconPath(job.game.action), std::ios::binary);
                 data.assign(std::istreambuf_iterator<char>(in), {});
             } else {
@@ -1687,9 +1751,9 @@ void CardsActivity::wantArt() {
     if (gridOn()) {
         // The grid shows the console's own icons: the whole page, then the
         // pages either side; and the backgrounds of the tiles around the cursor.
-        const int pg = s / kGridPer;
-        for (int i = pg * kGridPer; i < (pg + 1) * kGridPer; ++i) add(i, kStock);
-        for (int d : {1, -1, kGridCols, -kGridCols}) add(s + d, kBackground);
+        const int pg = s / m_gridPer;
+        for (int i = pg * m_gridPer; i < (pg + 1) * m_gridPer; ++i) add(i, kStock);
+        for (int d : {1, -1, m_gridCols, -m_gridCols}) add(s + d, kBackground);
         // Then every other page's, nearest pages first, when nothing else is
         // wanted (they're kept: SwitchU's grid shows its icons at once). Up to
         // a third of the picture memory (~100 icons); past that, the pages
@@ -1697,12 +1761,12 @@ void CardsActivity::wantArt() {
         std::uint64_t stockBytes = 0;
         for (const auto& [id, art] : m_art)
             if (art.stock) stockBytes += 4ull * art.stock->width() * art.stock->height();
-        const int pages = (static_cast<int>(page.size()) + kGridPer - 1) / kGridPer;
+        const int pages = (static_cast<int>(page.size()) + m_gridPer - 1) / m_gridPer;
         const int far = stockBytes < kArtworkBudget / 3 ? pages : 1;
         const size_t before = jobs.size();
         for (int d = 1; d <= far; ++d)
             for (int p : {pg + d, pg - d})
-                for (int i = p * kGridPer; i < (p + 1) * kGridPer; ++i) add(i, kStock, false);
+                for (int i = p * m_gridPer; i < (p + 1) * m_gridPer; ++i) add(i, kStock, false);
         if (jobs.size() > before) {
             std::lock_guard<std::mutex> lk(m_mu);
             for (size_t j = before; j < jobs.size(); ++j) m_idleJobs.push_back(std::move(jobs[j]));
@@ -1722,8 +1786,8 @@ void CardsActivity::wantArt() {
         for (auto it = m_jobs.begin(); it != m_jobs.end();) {
             auto found = std::find_if(page.begin(), page.end(), [&](const Game& g) { return g.id == it->game.id; });
             const int distance = found == page.end() ? 10000 : std::abs(static_cast<int>(found - page.begin()) - s);
-            const int radius = it->what == kCard ? 12 : it->what == kStock ? 2 * kGridPer
-                             : it->what == kBackground ? (gridOn() ? kGridCols : 3) : 2;
+            const int radius = it->what == kCard ? 12 : it->what == kStock ? 2 * m_gridPer
+                             : it->what == kBackground ? (gridOn() ? m_gridCols : 3) : 2;
             if (it->what != kLaunch && !(m_locked && it->game.id == m_lockGameId) && distance > radius) {
                 auto& a = m_art[it->game.id];
                 (it->what == kBackground ? a.bgAsked : it->what == kIcon ? a.iconAsked
@@ -1794,7 +1858,9 @@ void CardsActivity::takeArt() {
             alertsLater = m_playersLive;
             m_playersLive = false;
         }
-        if (m_genresFresh) {
+        if (m_genresFresh || !m_infosIn.empty()) {
+            for (auto& [id, i] : m_infosIn) m_infos[id] = std::move(i);
+            m_infosIn.clear();
             for (auto& [id, g] : m_genresIn) m_genres[id] = std::move(g);
             m_genresIn.clear();
             m_genresFresh = false;
@@ -1860,8 +1926,8 @@ void CardsActivity::takeArt() {
             const auto& page = games();
             const auto found = std::find_if(page.begin(), page.end(), [&](const Game& g) { return g.id == d.id; });
             const int distance = found == page.end() ? 10000 : std::abs(static_cast<int>(found - page.begin()) - sel());
-            if (distance > (d.what == kCard ? 12 : d.what == kStock ? 2 * kGridPer
-                            : d.what == kBackground ? (gridOn() ? kGridCols : 3) : 2)) {
+            if (distance > (d.what == kCard ? 12 : d.what == kStock ? 2 * m_gridPer
+                            : d.what == kBackground ? (gridOn() ? m_gridCols : 3) : 2)) {
                 if (asked) *asked = false;
                 continue;
             }
@@ -2168,7 +2234,7 @@ void CardsActivity::goToPage(int page, int dir) {
     const Game* cur = current();
     m_bgId = cur ? cur->id : 0;
     // The grid starts on the new list's page, its cursor appearing there.
-    m_gridShown = m_gridFrom = std::max(0, sel()) / kGridPer;
+    m_gridShown = m_gridFrom = std::max(0, sel()) / m_gridPer;
     m_gridSlideT = 1.f;
     m_gridFocus = m_gridUnfocus = -1;
     m_curInit = false;
@@ -2365,9 +2431,10 @@ void CardsActivity::checkNextendoAlerts() {
 
 void CardsActivity::askGenres() {
     std::vector<std::uint64_t> want;
-    for (const Game& g : m_pages[kGames])
-        if (!g.homebrew && g.id && !m_genres.count(g.id) && m_genreAsked.insert(g.id).second) // (homebrew: not on the eShop)
-            want.push_back(g.id);
+    for (int p = 0; p < kPageCount; ++p)
+        for (const Game& g : m_pages[p])
+            if (!g.homebrew && g.id && g.action.empty() && !m_infos.count(g.id) && m_genreAsked.insert(g.id).second) // (homebrew: not on the eShop)
+                want.push_back(g.id);
     std::lock_guard<std::mutex> lk(m_mu);
     for (std::uint64_t id : want)
         if (!m_genresIn.count(id) && std::find(m_genreWant.begin(), m_genreWant.end(), id) == m_genreWant.end())
@@ -3949,6 +4016,7 @@ void CardsActivity::openGallery(int mode) {
     m_pickWall = mode;
     if (mode == 4) m_lockPlaylist = switchu::lockpicture::playlist();
     m_pickCover = false;
+    m_pickIconMode = false;
     m_pickQuery.clear();
     m_pickChoices.clear();
     m_pickTex.clear();
@@ -4447,6 +4515,10 @@ void CardsActivity::openOptions() {
 #endif
     items.push_back(action("Move", [this]() { startMove(); }));
     items.back().glyph = "arrows";
+    if (!m_settings.xmbView || !m_settings.crossPlusDetails) {
+        items.push_back(action("Details", [this]() { openCrossInfo(); }));
+        items.back().glyph = "dots";
+    }
     if (g.id && g.action != "get") {
         items.push_back(action(isFavourite(g.id) ? "Remove from favourites" : "Add to favourites",
                                [this, g]() { toggleFavourite(g); }));
@@ -4543,6 +4615,9 @@ void CardsActivity::openOptions() {
         // A game's, and homebrew's too (a port, an app, one moved to Games): chosen by hand for homebrew.
         items.push_back(action("Title picture", [this, g]() { openTitlePicker(g); }));
         items.back().glyph = "tag";
+        items.push_back(action("Icon picture", [this, g]() { openIconPicker(g, customIconKey(g), false); }));
+        items.back().glyph = "copy";
+        items.back().detail = "The square icon in the grid and the cross view";
         if (game) {
             items.push_back(action("About this game", [this, g]() { openGameInfo(g); }));
             items.back().glyph = "dots";
@@ -4806,6 +4881,7 @@ void CardsActivity::startPickJob(std::function<std::vector<TitleChoice>()> work)
 }
 
 void CardsActivity::openTitlePicker(const Game& g, bool cover, const std::string& query, bool hero) {
+    m_pickIconMode = false;
     m_pickCover = cover && !hero;
     m_pickHero = hero;
     m_pickWall = 0;
@@ -4929,6 +5005,25 @@ void CardsActivity::pickChoice(int index) {
     TitleChoice c = m_pickChoices[(size_t)index];
     c.rgba.clear();
     const Game g = m_pickGame;
+    if (m_pickIconMode) { // + > Icon picture (or a category's): kept in config/CardsNX/icons
+        const std::string key = m_pickIconKey;
+        m_pickSaveId = g.id;
+        m_pickSaveIcon = true;
+        m_pickSaveIconKey = key;
+        m_pickSaveCover = m_pickSaveHero = false;
+        m_pickSaveTooBig = false;
+        bool* tooBig = &m_pickSaveTooBig;
+        m_pickSave = std::async(std::launch::async, [c, key, tooBig]() {
+            offScreenCore();
+            const bool ok = chooseIconArt(key, c.own ? nullptr : &c, tooBig);
+            threadDone();
+            return ok;
+        });
+        m_pickOpen = false;
+        m_audio.play("activation");
+        return;
+    }
+    m_pickSaveIcon = false;
     const bool cover = m_pickCover, hero = m_pickHero;
     if (cover && g.homebrew && g.fullCard == c.own) { // an app's cover is drawn as a game's card
         const std::string key = g.path.empty() ? idText(g.id) : g.path;
@@ -5160,7 +5255,7 @@ void CardsActivity::drawPicker(nxui::Renderer& r) {
     icon(r, "tag", kPickCard.x + 46.f, kPickCard.y + 46.f + dy, 26.f, kWhite.withAlpha(a));
     const std::string title = m_pickWall == 4 ? "Pictures to shuffle" : m_pickWall == 3 ? "Album" : m_pickWall == 2 ? "Lock screen picture" : m_pickWall == 1 ? "Background"
                             : m_pickHero     ? "Background picture"
-                            : m_pickCover    ? "Card picture" : "Title picture";
+                            : m_pickCover    ? "Card picture" : m_pickIconMode ? "Icon picture" : "Title picture";
     textMid(r, m_fTitle, title, kPickCard.x + 72.f, kPickCard.y + 46.f + dy, kWhite.withAlpha(a));
     const float nameX = kPickCard.x + 92.f + measured(m_fTitle, title).x;
     const std::string hint = m_pickWall == 4 ? "A Select    Y All    L R More    B Done"
@@ -5441,7 +5536,7 @@ void CardsActivity::finishMove(bool keep) {
             sel() = gameCardSelection(m_pages[m_page], m_moveId, sel());
             m_scroll += static_cast<float>(sel() - was);
         }
-        if (gridOn()) gridSlideTo(sel() / kGridPer);
+        if (gridOn()) gridSlideTo(sel() / m_gridPer);
         m_bgId = m_bgPrevId = m_moveId;
         m_audio.play("hide_modal");
         refreshGameCardPresentation();
@@ -7043,15 +7138,6 @@ void CardsActivity::buildSettings() {
     look.rows.push_back(std::move(wall));
     look.rows.push_back(slider("Background softness", [this]() { return m_settings.haze * 100 / 80; },
         [this, save](int v) { m_settings.haze = v * 80 / 100; save(); }, "A haze over the game's art"));
-    look.rows.push_back(toggle("Grid view", [this]() { return m_settings.gridView && !m_settings.xmbView; },
-        [this]() {
-            if (m_settings.xmbView) {
-                setCrossView(false);
-                if (!m_settings.gridView) toggleGrid();
-            } else {
-                toggleGrid();
-            }
-        }, "SwitchU's Wii U grid of icons instead of the cards (Y; hold Y to move a game)"));
     look.rows.push_back(toggle("Moving background", [this]() { return m_settings.bgMotion; },
         [this, save]() { m_settings.bgMotion = !m_settings.bgMotion; save(); }, "The art drifts slowly"));
     look.rows.push_back(choice("Clock", [this]() { return std::string(m_settings.clock24 ? "24-hour" : "12-hour"); },
@@ -7125,7 +7211,45 @@ void CardsActivity::buildSettings() {
     crossTab.rows.push_back(toggle("+ opens the details", [this]() { return m_settings.crossPlusDetails; },
         [this, save]() { m_settings.crossPlusDetails = !m_settings.crossPlusDetails; save(); },
         "On: + slides out the game's details (art, play time, note, achievements). Off: + opens its options"));
+    crossTab.rows.push_back(action("Category icons", [this]() { m_sheetOpen = false; openCategoryIcons(); }));
+    crossTab.rows.back().detail = "Your own picture for each category (from config/CardsNX/my-pictures). A game's: + > Icon picture";
     m_sheet.push_back(std::move(crossTab));
+
+    // The grid (SwitchU's Wii U grid of icons): its own tab too.
+    Section gridTab{"Grid view", "copy", {}};
+    gridTab.rows.push_back(toggle("Grid view", [this]() { return m_settings.gridView && !m_settings.xmbView; },
+        [this]() {
+            if (m_settings.xmbView) {
+                setCrossView(false);
+                if (!m_settings.gridView) toggleGrid();
+            } else {
+                toggleGrid();
+            }
+        }, "SwitchU's Wii U grid of icons instead of the cards (Y; hold Y to move a game)"));
+    gridTab.rows.push_back(choice("Layout", [this]() {
+        static const char* const names[] = {"5 x 3 (SwitchU)", "4 x 3", "4 x 2, big icons", "6 x 4, small icons"};
+        return std::string(names[std::clamp(m_settings.gridLayout, 0, 3)]);
+    }, [this, save](int d) {
+        m_settings.gridLayout = (m_settings.gridLayout + d + 4) % 4;
+        applyGridLayout();
+        wantArt();
+        save();
+    }, "Columns and rows of icons on each page"));
+    gridTab.rows.push_back(choice("Cursor colour", [this]() {
+        static const char* const names[] = {"Highlight colour", "SwitchU blue", "Always the highlight colour"};
+        return std::string(names[std::clamp(m_settings.gridCursorColour, 0, 2)]);
+    }, [this, save](int d) {
+        m_settings.gridCursorColour = (m_settings.gridCursorColour + d + 3) % 3;
+        save();
+    }, "Highlight colour: SwitchU's blue while the highlight is White"));
+    gridTab.rows.push_back(toggle("Game name", [this]() { return m_settings.gridPill; },
+        [this, save]() { m_settings.gridPill = !m_settings.gridPill; save(); }, "The chosen game's name under the grid"));
+    gridTab.rows.push_back(toggle("Page dots", [this]() { return m_settings.gridDots; },
+        [this, save]() { m_settings.gridDots = !m_settings.gridDots; save(); }, "Which page of icons you're on"));
+    gridTab.rows.push_back(toggle("Favourite stars", [this]() { return m_settings.gridStars; },
+        [this, save]() { m_settings.gridStars = !m_settings.gridStars; save(); }, "A star on your favourites' icons"));
+    gridTab.rows.push_back(info("Icons", []() { return tr("+ > Icon picture"); }));
+    m_sheet.push_back(std::move(gridTab));
 
     // The lock screen: its own tab (HomeNX's lock screen shares the password and the picture).
     Section lockTab{"Lock screen", "moon", {}};
@@ -9291,14 +9415,14 @@ bool CardsActivity::handleTouch() {
         m_moveTouchY = y;
         const int n = static_cast<int>(games().size());
         if (gridOn()) {
-            const float pitchX = kGridCell + kGridPadX, pitchY = kGridCell + kGridPadY;
-            const int col = std::clamp(static_cast<int>(std::floor((x - kGridOriginX + kGridPadX * 0.5f) / pitchX)), 0, kGridCols - 1);
-            const int row = std::clamp(static_cast<int>(std::floor((y - kGridOriginY + kGridPadY * 0.5f) / pitchY)), 0, kGridRows - 1);
-            const int to = std::min(n - 1, m_gridShown * kGridPer + row * kGridCols + col);
+            const float pitchX = m_gridCell + m_gridPadX, pitchY = m_gridCell + m_gridPadY;
+            const int col = std::clamp(static_cast<int>(std::floor((x - m_gridOriginX + m_gridPadX * 0.5f) / pitchX)), 0, m_gridCols - 1);
+            const int row = std::clamp(static_cast<int>(std::floor((y - m_gridOriginY + m_gridPadY * 0.5f) / pitchY)), 0, m_gridRows - 1);
+            const int to = std::min(n - 1, m_gridShown * m_gridPer + row * m_gridCols + col);
             if (m_gridSlideT >= 1.f && to != sel()) select(to);
             constexpr float kEdgeZone = 48.f, kEdgeHoldDelay = 0.45f;
-            const float right = kGridOriginX + kGridCols * kGridCell + (kGridCols - 1) * kGridPadX;
-            const int dir = x < kGridOriginX + kEdgeZone ? -1 : x > right - kEdgeZone ? 1 : 0;
+            const float right = m_gridOriginX + m_gridCols * m_gridCell + (m_gridCols - 1) * m_gridPadX;
+            const int dir = x < m_gridOriginX + kEdgeZone ? -1 : x > right - kEdgeZone ? 1 : 0;
             if (dir != m_moveEdgeDir) { // (m_moveEdgeHold: when it came to this edge)
                 m_moveEdgeDir = dir;
                 m_moveEdgeHold = m_time;
@@ -9314,6 +9438,27 @@ bool CardsActivity::handleTouch() {
         return true;
     }
 
+    if (m_crossInfo) { // the details panel: a button runs; outside it, it closes
+        if (!in.touchUp()) return in.isTouching();
+        constexpr float kPanelX = 1280.f - 560.f;
+        if (x < kPanelX) {
+            m_crossInfo = false;
+            m_audio.play("hide_modal");
+            return true;
+        }
+        const auto actions = crossInfoActions();
+        const float bx = kPanelX + 32.f, bw = (560.f - 64.f) / static_cast<float>(std::max<size_t>(1, actions.size()));
+        if (y >= 720.f - 92.f && y < 720.f - 28.f) {
+            const int i = static_cast<int>((x - bx) / bw);
+            if (i >= 0 && i < static_cast<int>(actions.size())) {
+                m_crossInfoSel = i;
+                m_audio.play("activation");
+                auto run = actions[(size_t)i].run;
+                run();
+            }
+        }
+        return true;
+    }
     if (m_settings.xmbView && y >= 95.f) return crossTouch(x, y); // (the bar: as always, below)
     if (in.touchDown()) {
         m_touchOnCards = y > 100.f && y < (gridOn() ? 650.f : 490.f);
@@ -9369,7 +9514,7 @@ bool CardsActivity::handleTouch() {
             if (!m_dragging && std::abs(dx) > 14.f) m_dragging = true;
             if (m_dragging) {
                 // It follows the finger; past the first or last page, stiffly.
-                const int pages = (static_cast<int>(games().size()) + kGridPer - 1) / kGridPer;
+                const int pages = (static_cast<int>(games().size()) + m_gridPer - 1) / m_gridPer;
                 float off = m_gridGrab + dx;
                 if ((off > 0.f && m_gridShown == 0) || (off < 0.f && m_gridShown >= pages - 1)) off *= 0.35f;
                 m_gridDrag = off;
@@ -10005,7 +10150,8 @@ void CardsActivity::onUpdate(float dt) {
                 const std::string query = "#" + std::to_string(id), label = name;
                 items.push_back(action(name, [this, query, label]() {
                     m_pickLabel = label;
-                    openTitlePicker(m_pickGame, m_pickCover, query, m_pickHero);
+                    if (m_pickIconMode) openIconPicker(m_pickGame, m_pickIconKey, false, query);
+                    else openTitlePicker(m_pickGame, m_pickCover, query, m_pickHero);
                 }));
             }
             m_pickOpen = false; // (the list in its place; picking reopens it)
@@ -10186,7 +10332,16 @@ void CardsActivity::onUpdate(float dt) {
     if (m_pickSave.valid() && m_pickSave.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         if (m_pickSave.get()) {
             auto it = m_art.find(m_pickSaveId);
-            if (it != m_art.end() && m_pickSaveHero) { // the new background
+            if (m_pickSaveIcon) { // a new icon: the game's (the grid's, the cross view's), or a category's
+                m_customIconTex.erase(m_pickSaveIconKey);
+                m_customIconNone.erase(m_pickSaveIconKey);
+                if (it != m_art.end() && m_pickSaveId) {
+                    app().gpu().waitIdle(); // (it may still be drawing)
+                    it->second.stock.reset();
+                    it->second.stockAsked = false;
+                }
+                m_pickSaveIcon = false;
+            } else if (it != m_art.end() && m_pickSaveHero) { // the new background
                 app().gpu().waitIdle(); // (it may still be drawing)
                 it->second.bg.reset();
                 it->second.bgAsked = false;
@@ -10434,6 +10589,10 @@ void CardsActivity::onUpdate(float dt) {
     }
     if (!m_menu.empty()) {
         updatePopup();
+        return;
+    }
+    if (m_crossInfo) { // the details panel, in any view
+        updateCrossInfo();
         return;
     }
     if (m_settings.xmbView && !m_moving && m_zone != Zone::Top && updateCross(dt)) return;
@@ -10745,6 +10904,7 @@ void CardsActivity::draw(nxui::Renderer& r) {
     drawStep("draw: the cards' extras");
     if (m_settings.xmbView) drawCross(r); // (after the blurred copy: its glass shows the art behind)
     else drawCardExtras(r);
+    drawCrossInfo(r); // the details panel (+ > Details; + in the cross view), in any view
     drawStep("draw: the bar and the panel");
     // Launching: the bar and the panel go first.
     const int leaveStyle = launchStyle();
@@ -11045,7 +11205,7 @@ bool CardsActivity::cardRect(int index, nxui::Rect& card, float& chosen) {
         m_forceLayout = 0;
         bool inRow = cardRectAt(index, row, cRow);
         m_forceLayout = 1;
-        bool inGrid = cardRectAt(index, tile, cTile) && index / kGridPer == m_gridShown;
+        bool inGrid = cardRectAt(index, tile, cTile) && index / m_gridPer == m_gridShown;
         m_forceLayout = -1;
         // Off the row's screen: it grows in at its tile (from 0.85, as it fades
         // in), all of them alike. (Flying in from where they'd be in the row,
@@ -11366,7 +11526,9 @@ void CardsActivity::openCrossInfo() {
     m_crossInfo = true;
     m_crossInfoSel = 0;
     m_crossFacts.id = 0; // (read again for this game)
+    m_crossInfoScroll = 0;
     crossInfoFacts();
+    if (const Game* g = current()) wantInfo(g->id);
     m_audio.play("show_modal");
     wantArt();
 }
@@ -11414,8 +11576,9 @@ std::vector<CardsActivity::CrossItem> CardsActivity::crossInfoActions() {
     return items;
 }
 
-// The panel's buttons: up / down its rows, A runs one, L / R the game before
-// or after (the panel stays), B or + closes it.
+// The panel's buttons: left / right its buttons (along the bottom), A runs
+// one; up / down scroll the description; L / R (ZL / ZR) the game before or
+// after (the panel stays); B or + closes it.
 void CardsActivity::updateCrossInfo() {
     auto& in = app().input();
     using B = nxui::Button;
@@ -11426,16 +11589,20 @@ void CardsActivity::updateCrossInfo() {
     }
     const auto actions = crossInfoActions();
     const int n = static_cast<int>(actions.size());
-    const bool up = in.isDown(B::DUp) || in.isDown(B::LStickU) || in.isDown(B::RStickU);
-    const bool down = in.isDown(B::DDown) || in.isDown(B::LStickD) || in.isDown(B::RStickD);
-    if (up || down) {
-        const int to = std::clamp(m_crossInfoSel + (up ? -1 : 1), 0, std::max(0, n - 1));
+    const bool left = in.isDown(B::DLeft) || in.isDown(B::LStickL) || in.isDown(B::RStickL);
+    const bool right = in.isDown(B::DRight) || in.isDown(B::LStickR) || in.isDown(B::RStickR);
+    if (left || right) {
+        const int to = std::clamp(m_crossInfoSel + (left ? -1 : 1), 0, std::max(0, n - 1));
         if (to != m_crossInfoSel) m_audio.play("navigation");
         m_crossInfoSel = to;
     }
-    if (in.isDown(B::L) || in.isDown(B::R) || in.isDown(B::DLeft) || in.isDown(B::DRight)) {
-        select(sel() + (in.isDown(B::L) || in.isDown(B::DLeft) ? -1 : 1));
+    if (in.isDown(B::DUp) || in.isDown(B::LStickU) || in.isDown(B::RStickU)) m_crossInfoScroll = std::max(0, m_crossInfoScroll - 1);
+    if (in.isDown(B::DDown) || in.isDown(B::LStickD) || in.isDown(B::RStickD)) ++m_crossInfoScroll; // (drawing keeps it in range)
+    if (in.isDown(B::L) || in.isDown(B::R) || in.isDown(B::ZL) || in.isDown(B::ZR)) {
+        select(sel() + (in.isDown(B::L) || in.isDown(B::ZL) ? -1 : 1));
         crossInfoFacts();
+        m_crossInfoScroll = 0;
+        if (const Game* g = current()) wantInfo(g->id);
         m_crossInfoSel = std::min(m_crossInfoSel, static_cast<int>(crossInfoActions().size()) - 1);
     }
     if (in.isDown(B::A) && m_crossInfoSel >= 0 && m_crossInfoSel < n) {
@@ -11444,6 +11611,16 @@ void CardsActivity::updateCrossInfo() {
         run();
     }
     if (in.isDown(B::X)) askClose();
+}
+
+// The panel on this game: its facts wanted first, if they aren't known yet.
+void CardsActivity::wantInfo(std::uint64_t id) {
+    if (!id || m_infos.count(id)) return;
+    std::lock_guard<std::mutex> lk(m_mu);
+    m_genreWant.erase(std::remove(m_genreWant.begin(), m_genreWant.end(), id), m_genreWant.end());
+    m_genreWant.push_back(id); // (taken from the back: next)
+    m_genreAsked.insert(id);
+    m_cv.notify_all();
 }
 
 void CardsActivity::editNote(const Game& game) {
@@ -11459,6 +11636,11 @@ void CardsActivity::editNote(const Game& game) {
 }
 
 void CardsActivity::drawCrossInfo(nxui::Renderer& r) {
+    static float lastAt = 0.f;
+    const float dt = std::clamp(m_time - lastAt, 0.f, 0.1f);
+    lastAt = m_time;
+    m_crossInfoIn += ((m_crossInfo ? 1.f : 0.f) - m_crossInfoIn) * (m_settings.motion ? std::min(1.f, dt * 12.f) : 1.f);
+    if (!m_crossInfo && m_crossInfoIn < 0.01f) m_crossInfoIn = 0.f;
     if (m_crossInfoIn <= 0.001f) return;
     const Game* gp = current();
     if (!gp) return;
@@ -11467,81 +11649,179 @@ void CardsActivity::drawCrossInfo(nxui::Renderer& r) {
     const float e = easeOut(m_crossInfoIn), a = e;
     const float w = 560.f;
     const nxui::Rect panel{1280.f - w * e, 0.f, w, 720.f};
-    frost(r, panel, 0.f, nxui::Color(0.05f, 0.06f, 0.09f, 0.82f * a));
+    frost(r, panel, 0.f, nxui::Color(0.05f, 0.06f, 0.09f, 0.86f * a));
     r.drawRect({panel.x, 0.f, 1.5f, 720.f}, nxui::Color(1.f, 1.f, 1.f, 0.14f * a));
     const float x = panel.x + 32.f, cw = w - 64.f;
+    const auto infoIt = m_infos.find(g.id);
+    const GameInfo* info = infoIt != m_infos.end() && infoIt->second.found ? &infoIt->second : nullptr;
 
-    // The art: the card's picture (else its background, else the icon).
-    float y = 92.f;
+    // The art: the background picture (wide), else the card's; its icon over the corner.
+    float y = 84.f;
     const auto it = m_art.find(g.id);
-    const nxui::Rect art{x, y, cw, cw * 9.f / 16.f};
+    const nxui::Rect art{x, y, cw, std::floor(cw * 0.40f)};
     const nxui::Texture* tex = nullptr;
     bool box = false;
     if (it != m_art.end()) {
-        if (it->second.card && it->second.card->valid()) {
+        if (it->second.bg && it->second.bg->valid()) {
+            tex = it->second.bg.get();
+        } else if (it->second.card && it->second.card->valid()) {
             tex = it->second.card.get();
             box = it->second.kind == ArtKind::Box;
-        } else if (it->second.bg && it->second.bg->valid()) {
-            tex = it->second.bg.get();
         }
     }
-    if (tex) {
-        drawCover(r, tex, art, 14.f, kWhite.withAlpha(a), box ? 0.125f : 0.f, 0.f);
-    } else {
-        r.drawRoundedRect(art, nxui::Color(0.28f, 0.31f, 0.40f, 0.6f * a), 14.f);
-        const nxui::Texture* stock = it != m_art.end() && it->second.stock && it->second.stock->valid() ? it->second.stock.get() : nullptr;
-        if (stock) r.drawTextureRounded(stock, {art.x + art.width * 0.5f - 64.f, art.y + art.height * 0.5f - 64.f, 128.f, 128.f}, 12.f, kWhite.withAlpha(a));
+    if (tex) drawCover(r, tex, art, 14.f, kWhite.withAlpha(a), box ? 0.125f : 0.f, 0.f);
+    else r.drawRoundedRect(art, nxui::Color(0.28f, 0.31f, 0.40f, 0.6f * a), 14.f);
+    const nxui::Texture* stock = it != m_art.end() && it->second.stock && it->second.stock->valid() ? it->second.stock.get() : nullptr;
+    if (stock) {
+        const nxui::Rect ic{art.x + 14.f, art.y + art.height - 82.f, 68.f, 68.f};
+        r.drawRoundedRect({ic.x - 3.f, ic.y - 3.f, ic.width + 6.f, ic.height + 6.f}, nxui::Color(0.f, 0.f, 0.f, 0.35f * a), 12.f);
+        r.drawTextureRounded(stock, ic, 10.f, kWhite.withAlpha(a));
     }
     r.drawRoundedRectOutline(art, accent(0.5f * a), 14.f, 2.f);
-    y = art.y + art.height + 30.f;
+    y = art.y + art.height + 26.f;
 
     textMid(r, m_fTitle, fit(m_fTitle, g.name, cw), x, y, kWhite.withAlpha(a));
-    y += 30.f;
-    std::string by = g.author;
+    y += 28.f;
+    std::string by = info && !info->publisher.empty() ? info->publisher : g.author;
+    if (info && !info->developer.empty() && info->developer != by) by += (by.empty() ? "" : " / ") + info->developer;
     if (!g.version.empty()) by += (by.empty() ? "" : "  ·  ") + std::string("v") + g.version;
-    const auto genre = m_genres.find(g.id);
-    if (genre != m_genres.end() && !genre->second.empty()) by += (by.empty() ? "" : "  ·  ") + genre->second;
     if (!by.empty()) {
         textMid(r, m_fBody, fit(m_fBody, by, cw), x, y, kMuted.withAlpha(a));
-        y += 32.f;
+        y += 30.f;
     }
 
-    // What's known: two columns of facts.
+    // The facts: three columns.
     struct Fact { std::string label, value; };
     std::vector<Fact> facts;
     facts.push_back({tr("Played"), playTime(g.playSeconds)});
     facts.push_back({tr("Last played"), lastPlayed(g.lastPlayed)});
     if (g.launches) facts.push_back({tr("Times started"), std::to_string(g.launches)});
+    if (info && !info->released.empty()) facts.push_back({tr("Released"), info->released.substr(0, 10)});
+    if (info && !info->genres.empty()) facts.push_back({tr("Genre"), info->genres.front()});
+    if (info && !info->players.empty()) facts.push_back({tr("Players"), info->players});
+    if (info && !info->size.empty()) facts.push_back({tr("Size"), info->size});
+    if (info && !info->rating.empty()) facts.push_back({tr("Rating"), info->rating});
     if (m_settings.players && !g.homebrew) facts.push_back({tr("Online now"), std::to_string(onlineOf(g))});
     if (m_crossFacts.id == g.id && m_crossFacts.achTotal > 0)
         facts.push_back({tr("Achievements"), std::to_string(m_crossFacts.achEarned) + " / " + std::to_string(m_crossFacts.achTotal)});
+    if (facts.size() > 9) facts.resize(9);
+    const float colW = cw / 3.f;
     for (size_t i = 0; i < facts.size(); ++i) {
-        const float fx = x + static_cast<float>(i % 2) * (cw * 0.5f);
-        const float fy = y + static_cast<float>(i / 2) * 46.f;
-        textMid(r, m_fBadge, facts[i].label, fx, fy, kMuted.withAlpha(0.8f * a));
-        textMid(r, m_fPill, fit(m_fPill, facts[i].value, cw * 0.5f - 12.f), fx, fy + 20.f, kWhite.withAlpha(a));
+        const float fx = x + static_cast<float>(i % 3) * colW;
+        const float fy = y + static_cast<float>(i / 3) * 44.f;
+        textMid(r, m_fBadge, fit(m_fBadge, facts[i].label, colW - 10.f), fx, fy, kMuted.withAlpha(0.8f * a));
+        textMid(r, m_fPill, fit(m_fPill, facts[i].value, colW - 10.f), fx, fy + 19.f, kWhite.withAlpha(a));
     }
-    y += static_cast<float>((facts.size() + 1) / 2) * 46.f + 8.f;
+    y += static_cast<float>((facts.size() + 2) / 3) * 44.f + 6.f;
     const auto note = m_settings.notes.find(idText(g.id));
     if (note != m_settings.notes.end() && !note->second.empty()) {
         textMid(r, m_fBody, fit(m_fBody, "“" + note->second + "”", cw), x, y, accent(a));
-        y += 30.f;
+        y += 28.f;
     }
 
-    // What can be done: rows at the bottom.
-    const auto actions = crossInfoActions();
-    for (size_t i = 0; i < actions.size(); ++i) {
-        const float ry = 720.f - 40.f - static_cast<float>(actions.size() - i) * 46.f;
-        if (ry < y) continue; // (no room: the facts first)
-        const nxui::Rect row{x - 10.f, ry, cw + 20.f, 42.f};
-        const bool chosen = static_cast<int>(i) == m_crossInfoSel;
-        if (chosen) {
-            r.drawRoundedRect(row, accent(0.22f * a), 12.f);
-            r.drawRoundedRectOutline(row, accent(0.9f * a), 12.f, 2.f);
+    // The description (up / down scroll it), down to the buttons.
+    const float buttonsY = 720.f - 92.f;
+    if (info && !info->description.empty()) {
+        static std::uint64_t wrappedFor = 0;
+        static std::vector<std::string> lines;
+        if (wrappedFor != g.id) { // (wrapped once a game, not each frame)
+            std::string text = info->description;
+            for (char& c : text) if (c == '\n' || c == '\r') c = ' ';
+            lines = wrap(m_fBody, text, cw);
+            wrappedFor = g.id;
         }
-        icon(r, actions[i].glyph.c_str(), row.x + 26.f, row.y + 21.f, 20.f, kWhite.withAlpha(a));
-        textMid(r, m_fLabel, actions[i].label, row.x + 50.f, row.y + 21.f, kWhite.withAlpha(a * (chosen ? 1.f : 0.8f)));
+        const int room = std::max(0, static_cast<int>((buttonsY - 14.f - y) / 23.f));
+        m_crossInfoScroll = std::clamp(m_crossInfoScroll, 0, std::max(0, static_cast<int>(lines.size()) - room));
+        for (int l = 0; l < room && m_crossInfoScroll + l < static_cast<int>(lines.size()); ++l)
+            textMid(r, m_fBody, lines[(size_t)(m_crossInfoScroll + l)], x, y + 10.f + static_cast<float>(l) * 23.f,
+                    nxui::Color(1.f, 1.f, 1.f, 0.78f * a));
+        if (static_cast<int>(lines.size()) > room && room > 0) // more: a hint
+            textMid(r, m_fBadge, m_crossInfoScroll + room < static_cast<int>(lines.size()) ? "▼" : "▲",
+                    x + cw - 10.f, buttonsY - 12.f, kMuted.withAlpha(a));
+    } else if (!m_infos.count(g.id) && !g.homebrew && g.action.empty() && g.id) {
+        textMid(r, m_fBody, "Looking up this game...", x, y + 10.f, kMuted.withAlpha(0.7f * a));
     }
+
+    // The buttons along the bottom.
+    const auto actions = crossInfoActions();
+    const float bw = cw / static_cast<float>(std::max<size_t>(1, actions.size()));
+    for (size_t i = 0; i < actions.size(); ++i) {
+        const nxui::Rect b{x + static_cast<float>(i) * bw + 3.f, buttonsY, bw - 6.f, 64.f};
+        const bool chosen = static_cast<int>(i) == m_crossInfoSel;
+        r.drawRoundedRect(b, chosen ? accent(0.24f * a) : nxui::Color(1.f, 1.f, 1.f, 0.06f * a), 12.f);
+        if (chosen) r.drawRoundedRectOutline(b, accent(0.9f * a), 12.f, 2.f);
+        icon(r, actions[i].glyph.c_str(), b.x + b.width * 0.5f, b.y + 22.f, 20.f, kWhite.withAlpha(a));
+        const std::string label = fit(m_fBadge, actions[i].label, b.width - 8.f);
+        textMid(r, m_fBadge, label, b.x + (b.width - measured(m_fBadge, tr(label)).x) * 0.5f, b.y + 48.f,
+                kWhite.withAlpha(a * (chosen ? 1.f : 0.75f)));
+    }
+}
+
+// + > Icon picture (and a category's, Settings > Cross view > Category icons):
+// SteamGridDB's icons for the game, your own pictures, or its own icon back.
+void CardsActivity::openIconPicker(const Game& g, const std::string& key, bool mineOnly, const std::string& query) {
+    m_pickIconMode = true;
+    m_pickIconMine = mineOnly;
+    m_pickIconKey = key;
+    m_pickCover = m_pickHero = false;
+    m_pickWall = 0;
+    m_pickGame = g;
+    m_pickQuery = query;
+    m_pickChoices.clear();
+    m_pickTex.clear();
+    m_pickSel = 0;
+    const std::string sgdbKey = mineOnly ? std::string() : m_key;
+    startPickJob([g, sgdbKey, query, mineOnly]() {
+        offScreenCore();
+        std::vector<TitleChoice> choices;
+        if (!mineOnly) choices = iconChoices(forLookup(g), sgdbKey, 15, query);
+        TitleChoice own; // "its own icon": the custom one taken away
+        own.own = true;
+        if (!mineOnly) {
+            const std::vector<std::uint8_t> icon = gameIcon(g);
+            int w = 0, h = 0;
+            if (stbi_uc* px = icon.empty() ? nullptr : decodePicture(icon.data(), static_cast<int>(icon.size()), w, h)) {
+                own.rgba.assign(px, px + static_cast<size_t>(w) * h * 4);
+                stbi_image_free(px);
+                shrink(own.rgba, w, h, 160);
+                own.w = w;
+                own.h = h;
+            }
+        }
+        choices.insert(choices.begin(), std::move(own));
+        if (query.empty()) {
+            std::vector<TitleChoice> mine = myPictures(mineOnly ? 20 : 8);
+            choices.insert(choices.begin() + 1, std::make_move_iterator(mine.begin()), std::make_move_iterator(mine.end()));
+        }
+        const size_t most = static_cast<size_t>(kPickCols * kPickRows);
+        if (choices.size() > most) choices.resize(most);
+        threadDone();
+        return choices;
+    });
+    if (!m_pickOpen) {
+        m_pickIn = m_settings.motion ? 0.f : 1.f;
+        m_audio.play("show_modal");
+    }
+    m_pickOpen = true;
+    if (mineOnly) say("Your pictures: put PNG or JPG files in config/CardsNX/my-pictures.");
+}
+
+// Settings > Cross view > Category icons: a picture of his for each page's
+// category (and System), from config/CardsNX/my-pictures.
+void CardsActivity::openCategoryIcons() {
+    std::vector<MenuItem> items;
+    auto row = [this, &items](const std::string& label, const std::string& key) {
+        items.push_back(action(label, [this, key, label]() {
+            Game dummy;
+            dummy.name = label;
+            openIconPicker(dummy, key, true);
+        }));
+        items.back().value = [this, key]() { return tr(customIconFile(key).empty() ? "Default" : "Custom"); };
+    };
+    for (int p : crossPages()) row(pageName(p), "page-" + std::to_string(p));
+    row(tr("System"), "system");
+    items.push_back(action("Back", [] {}));
+    openMenu("Category icons", std::move(items));
 }
 
 // Y: the cards, the grid, the cross view, and round again.
@@ -11750,10 +12030,7 @@ void crossRow(float d, float& y, float& size, float& alpha) {
 }
 } // namespace
 
-void CardsActivity::drawCross(nxui::Renderer& r) {
-    drawCrossList(r);
-    drawCrossInfo(r);
-}
+void CardsActivity::drawCross(nxui::Renderer& r) { drawCrossList(r); }
 
 void CardsActivity::drawCrossList(nxui::Renderer& r) {
     const float kCrossX = crossX();
@@ -11766,8 +12043,6 @@ void CardsActivity::drawCrossList(nxui::Renderer& r) {
     m_crossRow += (static_cast<float>(std::max(0, sel())) - m_crossRow) * k;
     m_crossSysRow += (static_cast<float>(m_crossSysSel) - m_crossSysRow) * k;
     m_crossListIn = std::min(1.f, m_crossListIn + dt * 5.f);
-    m_crossInfoIn += ((m_crossInfo ? 1.f : 0.f) - m_crossInfoIn) * (m_settings.motion ? std::min(1.f, dt * 12.f) : 1.f);
-    if (!m_crossInfo && m_crossInfoIn < 0.01f) m_crossInfoIn = 0.f;
     const float intro = easeOut(m_intro * 2.2f);
     const float listA = intro * easeOut(m_crossListIn);
     const float listDx = (1.f - easeOut(m_crossListIn)) * 40.f;
@@ -11804,7 +12079,11 @@ void CardsActivity::drawCrossList(nxui::Renderer& r) {
         const float size = 52.f + 16.f * near;
         if (near > 0.01f)
             r.drawCircle({x, kCrossCatY}, size * 0.62f, accent(0.16f * near * a), 32);
-        icon(r, catGlyph(i), x, kCrossCatY, size * 0.6f, kWhite.withAlpha(a));
+        const std::string catKey = i >= static_cast<int>(pages.size()) ? std::string("system") : "page-" + std::to_string(pages[(size_t)i]);
+        if (const nxui::Texture* mine = customIcon(catKey)) // his own picture (Settings > Cross view > Category icons)
+            r.drawTextureRounded(mine, {x - size * 0.5f, kCrossCatY - size * 0.5f, size, size}, size * 0.2f, kWhite.withAlpha(a));
+        else
+            icon(r, catGlyph(i), x, kCrossCatY, size * 0.6f, kWhite.withAlpha(a));
         if (!m_settings.crossNames) continue;
         const std::string name = i >= static_cast<int>(pages.size()) ? tr("System") : pageName(pages[(size_t)i]);
         const float w = measured(m_fLabel, name).x * (0.82f + 0.18f * near);
@@ -11914,26 +12193,6 @@ bool CardsActivity::crossTouch(float x, float y) {
     const float kCrossX = crossX();
     auto& in = app().input();
     if (!in.touchUp()) return in.isTouching();
-    if (m_crossInfo) { // the panel: a row runs; outside it, it closes
-        constexpr float kPanelX = 1280.f - 560.f;
-        if (x < kPanelX) {
-            m_crossInfo = false;
-            m_audio.play("hide_modal");
-            return true;
-        }
-        const auto actions = crossInfoActions();
-        for (size_t i = 0; i < actions.size(); ++i) {
-            const float ry = 720.f - 40.f - static_cast<float>(actions.size() - i) * 46.f;
-            if (y >= ry && y < ry + 42.f) {
-                m_crossInfoSel = static_cast<int>(i);
-                m_audio.play("activation");
-                auto run = actions[i].run;
-                run();
-                return true;
-            }
-        }
-        return true;
-    }
     if (std::abs(in.touchStartX() - x) > 30.f || std::abs(in.touchStartY() - y) > 30.f) { // a swipe
         const float dx = x - in.touchStartX(), dy = y - in.touchStartY();
         if (std::abs(dx) > std::abs(dy)) crossCatTo(crossCat() + (dx < 0.f ? 1 : -1));
@@ -11983,7 +12242,7 @@ bool CardsActivity::crossTouch(float x, float y) {
 void CardsActivity::toggleGrid() {
     m_settings.gridView = !m_settings.gridView;
     m_settings.save();
-    m_gridShown = m_gridFrom = std::max(0, sel()) / kGridPer;
+    m_gridShown = m_gridFrom = std::max(0, sel()) / m_gridPer;
     m_gridSlideT = 1.f;
     m_gridBumpT = -1.f;
     m_gridBump = m_gridDrag = 0.f;
@@ -12009,10 +12268,10 @@ float CardsActivity::gridPageDx(int page) const {
 }
 
 nxui::Rect CardsActivity::gridTileRect(int index) const {
-    const int page = index / kGridPer, local = index % kGridPer;
-    const int col = local % kGridCols, row = local / kGridCols;
-    return {kGridOriginX + static_cast<float>(col) * (kGridCell + kGridPadX) + gridPageDx(page),
-            kGridOriginY + static_cast<float>(row) * (kGridCell + kGridPadY), kGridCell, kGridCell};
+    const int page = index / m_gridPer, local = index % m_gridPer;
+    const int col = local % m_gridCols, row = local / m_gridCols;
+    return {m_gridOriginX + static_cast<float>(col) * (m_gridCell + m_gridPadX) + gridPageDx(page),
+            m_gridOriginY + static_cast<float>(row) * (m_gridCell + m_gridPadY), m_gridCell, m_gridCell};
 }
 
 // GlossyIcon::onFocusGained / Lost: 1.075 over 0.18 s (outBack), back over 0.20 s (outCubic).
@@ -12062,12 +12321,12 @@ void CardsActivity::gridTouchRelease(float offset, float speed) {
     // as 1600 px/s a page turned plain swipes into two, 2026-11-11.)
     if (std::abs(speed) > 500.f && (speed < 0.f) == (offset < 0.f))
         count = 1 + (std::abs(speed) > 3500.f ? 1 : 0) + (std::abs(speed) > 5200.f ? 1 : 0);
-    else if (std::abs(offset) > kGridCell / 3.f)
+    else if (std::abs(offset) > m_gridCell / 3.f)
         count = 1;
     if (offset > 0.f) count = -count;
     int target = m_gridShown;
     if (n > 0 && count != 0) {
-        const int pages = (n + kGridPer - 1) / kGridPer;
+        const int pages = (n + m_gridPer - 1) / m_gridPer;
         target = std::clamp(m_gridShown + count, 0, pages - 1);
     }
     if (target != m_gridShown) {
@@ -12076,7 +12335,7 @@ void CardsActivity::gridTouchRelease(float offset, float speed) {
         m_gridShown = m_gridFrom = target;
         m_gridSlideT = 1.f;
         m_zone = Zone::Cards;
-        select(std::min(n - 1, target * kGridPer + s % kGridPer));
+        select(std::min(n - 1, target * m_gridPer + s % m_gridPer));
         m_audio.play("tab_transition");
         offset += static_cast<float>(target - old) * kGridStride; // (the new page, where it is now)
     }
@@ -12090,14 +12349,14 @@ void CardsActivity::gridPages(int count) {
     auto& page = games();
     if (page.empty() || count == 0 || m_gridSlideT < 1.f) return;
     const int n = static_cast<int>(page.size());
-    const int pages = (n + kGridPer - 1) / kGridPer;
+    const int pages = (n + m_gridPer - 1) / m_gridPer;
     const int s = std::clamp(sel(), 0, n - 1);
-    const int target = std::clamp(s / kGridPer + count, 0, pages - 1);
-    if (target == s / kGridPer) {
+    const int target = std::clamp(s / m_gridPer + count, 0, pages - 1);
+    if (target == s / m_gridPer) {
         gridPage(count > 0 ? 1 : -1, false); // (the edge's bump)
         return;
     }
-    const int to = std::min(n - 1, target * kGridPer + s % kGridPer);
+    const int to = std::min(n - 1, target * m_gridPer + s % m_gridPer);
     m_zone = Zone::Cards;
     gridSlideTo(target);
     select(to);
@@ -12108,9 +12367,9 @@ void CardsActivity::gridPage(int dir, bool fromEdge) {
     auto& page = games();
     if (page.empty() || m_gridSlideT < 1.f) return;
     const int n = static_cast<int>(page.size());
-    const int pages = (n + kGridPer - 1) / kGridPer;
+    const int pages = (n + m_gridPer - 1) / m_gridPer;
     const int s = std::clamp(sel(), 0, n - 1);
-    const int target = s / kGridPer + dir;
+    const int target = s / m_gridPer + dir;
     if (target < 0 || target >= pages) {
         if (m_gridBumpT < 0.f) {
             m_gridBumpDir = dir;
@@ -12118,10 +12377,10 @@ void CardsActivity::gridPage(int dir, bool fromEdge) {
         }
         return;
     }
-    const int local = s % kGridPer;
-    const int row = local / kGridCols;
-    const int col = fromEdge ? (dir > 0 ? 0 : kGridCols - 1) : local % kGridCols;
-    int to = target * kGridPer + row * kGridCols + col;
+    const int local = s % m_gridPer;
+    const int row = local / m_gridCols;
+    const int col = fromEdge ? (dir > 0 ? 0 : m_gridCols - 1) : local % m_gridCols;
+    int to = target * m_gridPer + row * m_gridCols + col;
     if (to >= n) to = n - 1; // a short last page: the nearest tile on it
     m_zone = Zone::Cards;
     gridSlideTo(target);
@@ -12136,9 +12395,9 @@ bool CardsActivity::gridMove(int dx, int dy) {
     if (page.empty()) return dy >= 0;
     const int n = static_cast<int>(page.size());
     const int s = std::clamp(sel(), 0, n - 1);
-    const int local = s % kGridPer, col = local % kGridCols, row = local / kGridCols;
+    const int local = s % m_gridPer, col = local % m_gridCols, row = local / m_gridCols;
     if (dx) {
-        if ((dx < 0 && col == 0) || (dx > 0 && (col == kGridCols - 1 || s + 1 >= n))) {
+        if ((dx < 0 && col == 0) || (dx > 0 && (col == m_gridCols - 1 || s + 1 >= n))) {
             gridPage(dx, true);
             return true;
         }
@@ -12147,11 +12406,11 @@ bool CardsActivity::gridMove(int dx, int dy) {
     }
     if (dy < 0) {
         if (row == 0) return false; // the top bar
-        select(s - kGridCols);
+        select(s - m_gridCols);
         return true;
     }
-    if (row + 1 < kGridRows && s + kGridCols < std::min(n, (s / kGridPer + 1) * kGridPer))
-        select(s + kGridCols);
+    if (row + 1 < m_gridRows && s + m_gridCols < std::min(n, (s / m_gridPer + 1) * m_gridPer))
+        select(s + m_gridCols);
     return true;
 }
 
@@ -12193,9 +12452,9 @@ void CardsActivity::updateGrid(float dt) {
     if (n == 0) return;
     const int s = std::clamp(sel(), 0, n - 1);
     // The selection moved some other way (touch, Move, a sort): its page.
-    if (s / kGridPer != m_gridShown && m_gridSlideT >= 1.f && !m_dragging) {
-        if (m_curInit) gridSlideTo(s / kGridPer);
-        else m_gridShown = m_gridFrom = s / kGridPer;
+    if (s / m_gridPer != m_gridShown && m_gridSlideT >= 1.f && !m_dragging) {
+        if (m_curInit) gridSlideTo(s / m_gridPer);
+        else m_gridShown = m_gridFrom = s / m_gridPer;
     }
     // Focus: the grid has it while the cursor is in it (the bar takes it).
     const int focused = m_zone == Zone::Cards ? s : -1;
@@ -12270,14 +12529,14 @@ void CardsActivity::updateGrid(float dt) {
     }
 
     // The page dots: the new page's dot pops (0.30 s).
-    const int shown = s / kGridPer;
+    const int shown = s / m_gridPer;
     if (shown != m_dotsPage) {
         if (m_dotsPage >= 0) m_dotsPop = 0.f;
         m_dotsPage = shown;
     }
     m_dotsPop = std::min(0.30f, m_dotsPop + dt);
     // The page arrows fade in where there's a page to go to.
-    const int pages = (n + kGridPer - 1) / kGridPer;
+    const int pages = (n + m_gridPer - 1) / m_gridPer;
     auto fade = [dt](float& a, bool on) { a = std::clamp(a + (on ? dt : -dt) / kGridArrowFade, 0.f, 1.f); };
     fade(m_arrowShowL, shown > 0);
     fade(m_arrowShowR, shown < pages - 1);
@@ -12335,18 +12594,18 @@ void CardsActivity::drawGrid(nxui::Renderer& r) {
     const int pageHi = std::max(m_gridShown, m_gridFrom) + 1;
     // (A card being moved goes last: over the others, as SwitchU's ghost.)
     std::vector<int> order;
-    for (int i = pageLo * kGridPer; i < std::min(n, (pageHi + 1) * kGridPer); ++i)
+    for (int i = pageLo * m_gridPer; i < std::min(n, (pageHi + 1) * m_gridPer); ++i)
         if (!(m_moving && i == s)) order.push_back(i);
     if (m_moving) order.push_back(s);
     for (int i : order) {
         if (launchDrawsCard() && i == m_leaveIndex) continue; // drawn on top (drawLaunch)
-        if (morphing() && i / kGridPer != m_gridShown) continue; // (only the page it morphs into)
+        if (morphing() && i / m_gridPer != m_gridShown) continue; // (only the page it morphs into)
         nxui::Rect tile;
         float t = 0.f;
         if (!cardRect(i, tile, t)) continue;
         // GlossyIcon::startAppear at HOME's start: scale and fade in (outExpo), staggered.
-        const int local = i % kGridPer;
-        const float delay = 0.1f + 0.03f * static_cast<float>(local % kGridCols + local / kGridCols);
+        const int local = i % m_gridPer;
+        const float delay = 0.1f + 0.03f * static_cast<float>(local % m_gridCols + local / m_gridCols);
         const float appear = m_intro >= 1.f ? 1.f : suOutExpo((m_intro - delay) / 0.4f);
         float a = making * gridIn * easeOut(m_pageIn) * std::min(1.f, appear * 1.33f);
         if (m_moving && i == s) a *= 0.80f + 0.08f * std::sin(m_moveTime * 8.f); // the ghost's pulse
@@ -12355,7 +12614,7 @@ void CardsActivity::drawGrid(nxui::Renderer& r) {
         const float pressed = m_pressZone == 1 && m_pressIndex == i ? std::sin(clamp01(m_pressT) * 3.14159f) : 0.f;
         if (pressed > 0.f) tile = scaled(tile, 1.f - 0.05f * pressed);
         const Game& g = page[(size_t)i];
-        const float sc = tile.width / kGridCell;
+        const float sc = tile.width / m_gridCell;
 
         r.drawRoundedRect({tile.x + 1.f, tile.y + 6.f, tile.width, tile.height},
                           nxui::Color(0.02f, 0.04f, 0.06f, 0.20f * a), kGridIconRadius + 1.f);
@@ -12408,7 +12667,7 @@ void CardsActivity::drawGrid(nxui::Renderer& r) {
             r.drawTriangle({bc.x - tw * 0.35f, bc.y - th * 0.5f}, {bc.x - tw * 0.35f, bc.y + th * 0.5f},
                            {bc.x + tw * 0.65f, bc.y}, green.withAlpha(0.98f * a));
         }
-        if (isFavourite(g.id)) { // starred: top left
+        if (m_settings.gridStars && isFavourite(g.id)) { // starred: top left
             const float bs = 26.f * sc;
             const nxui::Vec2 sc0{tile.x + 4.f * sc + bs * 0.5f, tile.y + 4.f * sc + bs * 0.5f};
             r.drawCircle(sc0, bs * 0.5f, nxui::Color(0.05f, 0.07f, 0.09f, 0.75f * a), 16);
@@ -12438,7 +12697,7 @@ void CardsActivity::drawGrid(nxui::Renderer& r) {
 
     const float uiA = gridIn * easeOut((m_intro - 0.3f) * 2.f) * othersAlpha();
     if (uiA <= 0.01f) return;
-    const int pages = (n + kGridPer - 1) / kGridPer;
+    const int pages = (n + m_gridPer - 1) / m_gridPer;
 
     // The page arrows (L / R here), kicked outward when a page turns.
     auto arrow = [&](bool left, float show, float kick) {
@@ -12462,8 +12721,8 @@ void CardsActivity::drawGrid(nxui::Renderer& r) {
     arrow(false, m_arrowShowR, m_arrowKickR);
 
     // The title pill: SwitchU's panel glass (alpha 0.90, its border and shine
-    // stronger), 9 / 22 padding, the system font.
-    {
+    // stronger), 9 / 22 padding, the system font. (Settings > Grid view > Game name.)
+    if (m_settings.gridPill) {
         nxui::Font& font = m_fGridPill.valid() ? m_fGridPill : m_fLabel;
         const float textH = font.measure(m_pillShown.empty() ? std::string("Ag") : m_pillShown).y;
         const float h = textH + 18.f;
@@ -12485,7 +12744,7 @@ void CardsActivity::drawGrid(nxui::Renderer& r) {
 
     // The page dots (PageIndicator): a glass pill, 4 px dots 14 apart, the
     // current one green and popping when the page changes.
-    if (pages > 1) {
+    if (pages > 1 && m_settings.gridDots) {
         constexpr float dotR = 4.f, gap = 14.f;
         const float dotsW = static_cast<float>(pages) * dotR * 2.f + static_cast<float>(pages - 1) * gap;
         const nxui::Rect pill{(1280.f - (dotsW + 36.f)) * 0.5f, kGridDotsY, dotsW + 36.f, kGridDotsH};

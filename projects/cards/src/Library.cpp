@@ -1742,6 +1742,196 @@ static bool chosenBytes(const TitleChoice& choice, std::string& data, bool* tooB
     return px != nullptr;
 }
 
+// ---------------------------------------------------------------- game info (nlib.cc)
+
+namespace {
+constexpr const char* kGameInfos = "sdmc:/config/CardsNX/gameinfo.json";
+
+// A value as text: a string, a number, a list of them ("a, b").
+std::string asText(const nlohmann::json& v) {
+    if (v.is_string()) return v.get<std::string>();
+    if (v.is_number_integer()) return std::to_string(v.get<long long>());
+    if (v.is_number_float()) return std::to_string(v.get<double>());
+    if (v.is_array()) {
+        std::string out;
+        for (const auto& e : v) {
+            const std::string t = asText(e);
+            if (t.empty()) continue;
+            if (!out.empty()) out += ", ";
+            out += t;
+        }
+        return out;
+    }
+    if (v.is_object()) for (const char* k : {"name", "en", "value"}) if (v.contains(k)) return asText(v[k]);
+    return {};
+}
+
+std::string firstOf(const nlohmann::json& j, std::initializer_list<const char*> keys) {
+    for (const char* k : keys)
+        if (j.contains(k)) {
+            std::string t = asText(j[k]);
+            if (!t.empty()) return t;
+        }
+    return {};
+}
+
+std::vector<std::string> listOf(const nlohmann::json& j, const char* key) {
+    std::vector<std::string> out;
+    if (!j.contains(key)) return out;
+    const auto& v = j[key];
+    if (v.is_array()) {
+        for (const auto& e : v) {
+            std::string t = asText(e);
+            if (!t.empty()) out.push_back(std::move(t));
+        }
+    } else {
+        std::string t = asText(v);
+        if (!t.empty()) out.push_back(std::move(t));
+    }
+    return out;
+}
+
+// Bytes as "12.3 GB".
+std::string sizeText(const std::string& raw) {
+    char* end = nullptr;
+    const double bytes = std::strtod(raw.c_str(), &end);
+    if (!end || *end || bytes <= 0) return raw;
+    char out[32];
+    if (bytes >= 1e9) std::snprintf(out, sizeof(out), "%.1f GB", bytes / 1e9);
+    else std::snprintf(out, sizeof(out), "%.0f MB", bytes / 1e6);
+    return out;
+}
+
+nlohmann::json infoJson(const GameInfo& i) {
+    return {{"found", i.found}, {"publisher", i.publisher}, {"developer", i.developer}, {"released", i.released},
+            {"description", i.description}, {"players", i.players}, {"size", i.size}, {"rating", i.rating},
+            {"genres", i.genres}, {"languages", i.languages}};
+}
+} // namespace
+
+bool fetchGameInfo(std::uint64_t id, GameInfo& info) {
+    info = {};
+    std::string body;
+    const long status = get("https://api.nlib.cc/nx/" + hexId(id), body);
+    if (status == 404) return true; // (not listed: kept as such)
+    if (status != 200) return false;
+    try {
+        const auto j = nlohmann::json::parse(body);
+        if (!j.is_object()) return true;
+        info.found = true;
+        info.publisher = firstOf(j, {"publisher"});
+        info.developer = firstOf(j, {"developer"});
+        info.released = firstOf(j, {"releaseDate", "release_date", "released"});
+        info.description = firstOf(j, {"description", "intro"});
+        info.players = firstOf(j, {"numberOfPlayers", "players"});
+        info.size = sizeText(firstOf(j, {"size"}));
+        info.rating = firstOf(j, {"rating", "ageRating"});
+        info.genres = listOf(j, "category");
+        info.languages = listOf(j, "languages");
+        if (info.description.size() > 2000) info.description.resize(2000); // (a page of it is plenty)
+    } catch (...) {
+        info.found = false;
+    }
+    return true;
+}
+
+std::map<std::uint64_t, GameInfo> loadGameInfos() {
+    std::map<std::uint64_t, GameInfo> out;
+    try {
+        std::ifstream f(kGameInfos, std::ios::binary);
+        if (!f) return out;
+        const auto j = nlohmann::json::parse(f);
+        for (auto it = j.begin(); it != j.end(); ++it) {
+            const auto& v = it.value();
+            if (!v.is_object()) continue;
+            GameInfo i;
+            i.found = v.value("found", false);
+            i.publisher = v.value("publisher", "");
+            i.developer = v.value("developer", "");
+            i.released = v.value("released", "");
+            i.description = v.value("description", "");
+            i.players = v.value("players", "");
+            i.size = v.value("size", "");
+            i.rating = v.value("rating", "");
+            i.genres = listOf(v, "genres");
+            i.languages = listOf(v, "languages");
+            out[std::strtoull(it.key().c_str(), nullptr, 16)] = std::move(i);
+        }
+    } catch (...) {
+    }
+    return out;
+}
+
+void saveGameInfos(const std::map<std::uint64_t, GameInfo>& infos) {
+    nlohmann::json j = nlohmann::json::object();
+    for (const auto& [id, i] : infos) j[hexId(id)] = infoJson(i);
+    std::error_code ec;
+    std::filesystem::create_directories("sdmc:/config/CardsNX", ec);
+    const std::string tmp = std::string(kGameInfos) + ".tmp";
+    {
+        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+        f << j.dump();
+        if (!f) return;
+    }
+    std::filesystem::remove(kGameInfos, ec);
+    std::filesystem::rename(tmp, kGameInfos, ec);
+}
+
+// ---------------------------------------------------------------- custom icons
+
+std::string customIconKey(const Game& game) {
+    if (!game.action.empty()) return "sys-" + game.action;
+    if (game.id) return hexId(game.id);
+    return "nro-" + hexId(std::hash<std::string>{}(game.path)); // (a .nro with no title ID)
+}
+
+std::string customIconFile(const std::string& key) {
+    std::error_code ec;
+    for (const char* ext : {".png", ".jpg", ".jpeg"}) {
+        const std::string path = std::string(kIconsDir) + "/" + key + ext;
+        if (std::filesystem::exists(path, ec)) return path;
+    }
+    return {};
+}
+
+bool chooseIconArt(const std::string& key, const TitleChoice* choice, bool* tooBig) {
+    std::error_code ec;
+    std::filesystem::create_directories(kIconsDir, ec);
+    for (const char* ext : {".png", ".jpg", ".jpeg"}) std::filesystem::remove(std::string(kIconsDir) + "/" + key + ext, ec);
+    if (!choice) return true;
+    std::string data;
+    if (!chosenBytes(*choice, data, tooBig)) return false;
+    const bool png = data.size() > 4 && static_cast<unsigned char>(data[0]) == 0x89 && data[1] == 'P';
+    writeFile(std::string(kIconsDir) + "/" + key + (png ? ".png" : ".jpg"), data);
+    return true;
+}
+
+std::vector<TitleChoice> iconChoices(const Game& game, const std::string& key, size_t max, const std::string& query) {
+    std::vector<TitleChoice> out;
+    if (key.empty()) return out;
+    std::set<std::string> seen;
+    std::string body;
+    for (const long long gameId : pickerGames(game, key, query))
+        for (const auto& [url, thumb] : steamGridDbAssets(gameId, key, "icons",
+                 "types=static&mimes=image/png&nsfw=false&humor=false", 20, nullptr)) {
+            if (out.size() >= max || url.empty() || !seen.insert(url).second) continue;
+            const std::string& small = thumb.empty() ? url : thumb;
+            if (get(small, body) != 200 || !isPicture(body)) continue;
+            int w = 0, h = 0;
+            unsigned char* px = decodePicture(reinterpret_cast<const unsigned char*>(body.data()), static_cast<int>(body.size()), w, h);
+            if (!px) continue;
+            TitleChoice c;
+            c.url = url;
+            c.rgba.assign(px, px + static_cast<size_t>(w) * h * 4);
+            stbi_image_free(px);
+            shrink(c.rgba, w, h, 160);
+            c.w = w;
+            c.h = h;
+            out.push_back(std::move(c));
+        }
+    return out;
+}
+
 bool chooseHeroArt(const Game& game, const TitleChoice* choice, bool* tooBig) {
     forgetShown(game.id);
     const std::string path = std::string(kCacheDir) + "/" + hexId(game.id) + ".bgme";

@@ -108,6 +108,12 @@ struct Settings {
     bool crossNames = true;       // the categories' names under their icons
     bool crossSystemCat = true;   // the System category (last)
     bool crossPlusDetails = true; // + opens the details panel (off: the options, as on the cards)
+    // Settings > Grid view.
+    int gridLayout = 0;           // 0 5x3 (SwitchU's), 1 4x3, 2 4x2 big, 3 6x4 small
+    int gridCursorColour = 0;     // 0 the highlight colour (White: SwitchU's blue), 1 always blue, 2 always the highlight
+    bool gridPill = true;         // the chosen game's name under the grid
+    bool gridDots = true;         // the page dots
+    bool gridStars = true;        // favourites' stars on the tiles
     std::map<std::string, std::string> names; // + > Rename: by title ID (hex) or .nro path
     std::vector<std::string> sheetOrder; // Settings' tabs by name, in his order (new ones after)
     std::string user;         // who games start as (hex), "" = the last one who played
@@ -286,6 +292,11 @@ struct Settings {
             crossNames = j.value("crossNames", crossNames);
             crossSystemCat = j.value("crossSystemCat", crossSystemCat);
             crossPlusDetails = j.value("crossPlusDetails", crossPlusDetails);
+            gridLayout = std::clamp(j.value("gridLayout", gridLayout), 0, 3);
+            gridCursorColour = std::clamp(j.value("gridCursorColour", gridCursorColour), 0, 2);
+            gridPill = j.value("gridPill", gridPill);
+            gridDots = j.value("gridDots", gridDots);
+            gridStars = j.value("gridStars", gridStars);
             accentR = std::clamp(j.value("accentR", accentR), 0, 100);
             accentG = std::clamp(j.value("accentG", accentG), 0, 100);
             accentB = std::clamp(j.value("accentB", accentB), 0, 100);
@@ -343,6 +354,11 @@ struct Settings {
         j["crossNames"] = crossNames;
         j["crossSystemCat"] = crossSystemCat;
         j["crossPlusDetails"] = crossPlusDetails;
+        j["gridLayout"] = gridLayout;
+        j["gridCursorColour"] = gridCursorColour;
+        j["gridPill"] = gridPill;
+        j["gridDots"] = gridDots;
+        j["gridStars"] = gridStars;
         j["accentR"] = accentR;
         j["accentG"] = accentG;
         j["accentB"] = accentB;

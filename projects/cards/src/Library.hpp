@@ -278,6 +278,29 @@ bool gameGenre(std::uint64_t id, std::string& genre);
 std::map<std::uint64_t, std::string> loadGenres();
 void saveGenres(const std::map<std::uint64_t, std::string>& genres);
 
+// What the eShop says about a game (nlib.cc), asked once and kept on the SD
+// card (config/CardsNX/gameinfo.json): never asked again once known, nor when
+// the site said it doesn't list the game (found false).
+struct GameInfo {
+    bool found = false;
+    std::string publisher, developer, released, description, players, size, rating;
+    std::vector<std::string> genres, languages;
+};
+// False: no answer (asked again later); true: answered (found or not).
+bool fetchGameInfo(std::uint64_t id, GameInfo& info);
+std::map<std::uint64_t, GameInfo> loadGameInfos();
+void saveGameInfos(const std::map<std::uint64_t, GameInfo>& infos);
+
+// Custom icons (+ > Icon picture; or put there by hand): sdmc:/config/CardsNX/icons/<key>.png
+// (or .jpg). The key: the title ID (hex), a Nintendo page entry's "sys-<action>",
+// or a page's "page-<n>" and the cross view's "system" for its categories.
+inline constexpr const char* kIconsDir = "sdmc:/config/CardsNX/icons";
+std::string customIconKey(const Game& game);
+std::string customIconFile(const std::string& key); // the file there is ("" none)
+bool chooseIconArt(const std::string& key, const TitleChoice* choice, bool* tooBig = nullptr); // nullptr: back to its own
+// + > Icon picture: SteamGridDB's icons (square) for the game to choose from.
+std::vector<TitleChoice> iconChoices(const Game& game, const std::string& key, size_t max = 15, const std::string& query = {});
+
 // Starts a game once this app has closed: as an application, through the
 // system; as an applet (from the homebrew menu), HomeNX's HOME starts it
 // (asked on the general channel, the way the system's own HOME is asked).

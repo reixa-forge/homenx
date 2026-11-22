@@ -205,7 +205,10 @@ private:
     // TitlePillWidget, PageIndicator and its page arrows, Default Dark): 5 x 3
     // glass tiles with the console's own icons, pages that slide (0.34 s),
     // the edge bump, a cursor that glides between tiles, the name pill and dots.
-    static constexpr int kGridCols = 5, kGridRows = 3, kGridPer = kGridCols * kGridRows;
+    // The grid's layout (Settings > Grid view > Layout): columns, rows, the tile and its spacing.
+    int m_gridCols = 5, m_gridRows = 3, m_gridPer = 15;
+    float m_gridCell = 150.f, m_gridPadX = 20.f, m_gridPadY = 16.f, m_gridOriginX = 225.f, m_gridOriginY = 119.f;
+    void applyGridLayout();
     bool gridOn() const { return m_forceLayout >= 0 ? m_forceLayout == 1 : m_settings.gridView; }
     // Y: the row and the grid morph into each other (IconGrid's layout morph,
     // 0.40 s inOutCubic): m_gridIn goes 0 (the row) to 1 (the grid) evenly.
@@ -245,6 +248,19 @@ private:
     void updateCrossInfo();
     void drawCrossInfo(nxui::Renderer& r);
     void editNote(const Game& game);
+    // The eShop's facts about each game (Library's GameInfo): the screen's copy,
+    // and the new ones from worker 0 (under m_mu).
+    std::map<std::uint64_t, GameInfo> m_infos, m_infosIn;
+    void wantInfo(std::uint64_t id);      // asked first (the panel is open on it)
+    int m_crossInfoScroll = 0;            // the description's first line shown
+    // Custom icons: + > Icon picture, and the cross view's categories.
+    bool m_pickIconMode = false, m_pickIconMine = false, m_pickSaveIcon = false;
+    std::string m_pickIconKey, m_pickSaveIconKey;
+    void openIconPicker(const Game& g, const std::string& key, bool mineOnly, const std::string& query = {});
+    std::map<std::string, std::unique_ptr<nxui::Texture>> m_customIconTex;
+    std::unordered_set<std::string> m_customIconNone;
+    const nxui::Texture* customIcon(const std::string& key); // (read once; "" none)
+    void openCategoryIcons();
     nxui::Color gridCursor(float a) const; // the grid's cursor: the highlight colour (White: SwitchU's blue)
     void drawGrid(nxui::Renderer& r);
     void updateGrid(float dt);
