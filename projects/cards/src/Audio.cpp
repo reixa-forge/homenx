@@ -317,9 +317,10 @@ std::string Audio::playingPath() const {
     return m_playing >= 0 && m_playing < static_cast<long>(m_tracks.size()) ? m_tracks[(size_t)m_playing] : std::string();
 }
 
-void Audio::setPlaylist(std::vector<std::string> off, std::vector<std::string> order) {
+void Audio::setPlaylist(std::vector<std::string> off, std::vector<std::string> order, bool only) {
     m_off = std::move(off);
     m_order = std::move(order);
+    m_only = only;
     applyPlaylist();
 }
 
@@ -330,8 +331,11 @@ void Audio::applyPlaylist() {
     auto pathAt = [this](long i) { return i >= 0 && i < static_cast<long>(m_tracks.size()) ? m_tracks[(size_t)i] : std::string(); };
     const std::string now = pathAt(m_playing), want = pathAt(m_wantTrack), job = pathAt(m_jobTrack);
     std::vector<size_t> keep;
-    for (size_t i = 0; i < m_allTracks.size(); ++i)
-        if (std::find(m_off.begin(), m_off.end(), m_allTracks[i]) == m_off.end()) keep.push_back(i);
+    for (size_t i = 0; i < m_allTracks.size(); ++i) {
+        const bool listed = std::find(m_order.begin(), m_order.end(), m_allTracks[i]) != m_order.end();
+        const bool off = std::find(m_off.begin(), m_off.end(), m_allTracks[i]) != m_off.end();
+        if (m_only ? listed : !off) keep.push_back(i);
+    }
     auto rank = [this](const std::string& path) {
         const auto it = std::find(m_order.begin(), m_order.end(), path);
         return it == m_order.end() ? m_order.size() : static_cast<size_t>(it - m_order.begin());

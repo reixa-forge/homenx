@@ -116,6 +116,8 @@ struct Settings {
     bool gridDots = true;         // the page dots
     bool gridStars = true;        // favourites' stars on the tiles
     std::vector<std::string> musicOff, musicOrder; // Settings > Sound > Your music (song paths)
+    std::map<std::string, std::vector<std::string>> playlists; // Settings > Sound > Playlists (name -> song paths, in order)
+    std::string playlist;         // the one HOME plays ("" all songs)
     std::map<std::string, std::string> names; // + > Rename: by title ID (hex) or .nro path
     std::vector<std::string> sheetOrder; // Settings' tabs by name, in his order (new ones after)
     std::string user;         // who games start as (hex), "" = the last one who played
@@ -302,6 +304,12 @@ struct Settings {
             gridStars = j.value("gridStars", gridStars);
             musicOff = j.value("musicOff", musicOff);
             musicOrder = j.value("musicOrder", musicOrder);
+            if (j.contains("playlists") && j["playlists"].is_object()) {
+                playlists.clear();
+                for (auto it = j["playlists"].begin(); it != j["playlists"].end(); ++it)
+                    if (it.value().is_array()) playlists[it.key()] = it.value().get<std::vector<std::string>>();
+            }
+            playlist = j.value("playlist", playlist);
             accentR = std::clamp(j.value("accentR", accentR), 0, 100);
             accentG = std::clamp(j.value("accentG", accentG), 0, 100);
             accentB = std::clamp(j.value("accentB", accentB), 0, 100);
@@ -367,6 +375,8 @@ struct Settings {
         j["gridStars"] = gridStars;
         j["musicOff"] = musicOff;
         j["musicOrder"] = musicOrder;
+        j["playlists"] = playlists;
+        j["playlist"] = playlist;
         j["accentR"] = accentR;
         j["accentG"] = accentG;
         j["accentB"] = accentB;

@@ -44,7 +44,8 @@ public:
     // (Settings > Sound > Your music). All of it, on or off:
     const std::vector<std::string>& allTracks() const { return m_allTracks; }
     const std::vector<std::string>& allTitles() const { return m_allTitles; }
-    void setPlaylist(std::vector<std::string> off, std::vector<std::string> order); // (paths)
+    // (paths) only: just the songs in `order` (a playlist), else all but `off`.
+    void setPlaylist(std::vector<std::string> off, std::vector<std::string> order, bool only = false);
     void rescan();                      // new songs put on the SD card: found, no restart
     bool scanning() const { return m_infoJob.valid(); }
     std::string playingPath() const;
@@ -76,6 +77,7 @@ private:
     std::vector<std::string> m_allTracks, m_allTitles; // every song found
     std::vector<float> m_allLengths;
     std::vector<std::string> m_off, m_order;        // (setPlaylist)
+    bool m_only = false;
     bool m_soundsLoaded = false;
     void applyPlaylist();                           // m_all* -> the ones played
     float m_position = 0.f;

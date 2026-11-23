@@ -1,5 +1,6 @@
 #pragma once
 #include "Audio.hpp"
+#include "GameMusic.hpp"
 #include "Library.hpp"
 #include "Mtp.hpp"
 #include "Settings.hpp"
@@ -275,6 +276,19 @@ private:
     void openCategoryIcons();
     void openMusicManager(int chosen = 0); // Settings > Sound > Your music
     void openSongMenu(const std::string& path, int at);
+    // Playlists (Settings > Sound > Playlists): named lists of songs, one played.
+    void applyMusicList();                // the playlist chosen (or all songs) to Audio
+    void openPlaylists(int chosen = 0);
+    void openPlaylist(const std::string& name);
+    void openPlaylistAdd(const std::string& name, int chosen = 0);
+    void openAddToPlaylist(const std::string& path);
+    void newPlaylist(std::function<void(const std::string&)> then);
+    // A game's own music (+ > Copy its music): copied to /music/<game> in the background.
+    std::unique_ptr<gamemusic::Progress> m_gm;
+    std::thread m_gmThread;
+    std::string m_gmGame;
+    void copyGameMusic(const Game& game);
+    void checkGameMusic();
     nxui::Color gridCursor(float a) const; // the grid's cursor: the highlight colour (White: SwitchU's blue)
     void drawGrid(nxui::Renderer& r);
     void updateGrid(float dt);
