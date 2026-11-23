@@ -377,6 +377,44 @@ std::string hex(std::uint64_t v) {
 }
 
 constexpr const char* kMount = "gamemusic";
+std::uint64_t g_fakePid = 0; // the registration made for the copy (unregistered when done)
+
+// The game registered with FS's program registry (as pm does when it starts
+// one), under a process ID no process has: FS opens a program's files by ID
+// only for programs it has registered ("not found", 2002-6605, otherwise).
+// Access as the menu's own: all of it (read-only use).
+bool registerGame(std::uint64_t appId, NcmStorageId sid) {
+    if (R_FAILED(fsprInitialize())) return false;
+    struct __attribute__((packed)) Fah { // the ACI's FS access header
+        u8 version = 1;
+        u8 pad[3] = {};
+        u64 permissions = ~0ull;
+        u32 contentOwnerOffset = 0x1C, contentOwnerSize = 0, saveOwnerOffset = 0x1C, saveOwnerSize = 0;
+    } fah;
+    struct __attribute__((packed)) Fac { // the ACID's FS access control
+        u8 version = 1;
+        u8 contentOwnerCount = 0, saveOwnerCount = 0, pad = 0;
+        u64 permissions = ~0ull;
+        u64 contentOwnerMin = 0, contentOwnerMax = 0, saveOwnerMin = 0, saveOwnerMax = 0;
+    } fac;
+    static_assert(sizeof(Fah) == 0x1C && sizeof(Fac) == 0x2C);
+    const std::uint64_t pid = 0x7E570000ull + (armGetSystemTick() & 0xFFFF); // (no real process has one this big)
+    const Result rc = fsprRegisterProgram(pid, appId, sid, &fah, sizeof(fah), &fac, sizeof(fac), 0);
+    logLine("registered " + hex(appId) + " (storage " + std::to_string(static_cast<int>(sid)) + "): rc=0x" + hex(rc));
+    if (R_FAILED(rc)) {
+        fsprExit();
+        return false;
+    }
+    g_fakePid = pid;
+    return true;
+}
+
+void unregisterGame() {
+    if (!g_fakePid) return;
+    fsprUnregisterProgram(g_fakePid);
+    fsprExit();
+    g_fakePid = 0;
+}
 
 // The game's files (RomFS), read-only, as "gamemusic:/". Two ways: by its
 // program ID (FS finds it), else its program content found with ncm and
@@ -394,6 +432,22 @@ bool mountGame(std::uint64_t appId, bool& asRomfs, std::string& why) {
         fsStorageClose(&storage);
     }
     logLine("by program ID: rc=0x" + hex(rc));
+    // Not running (so FS doesn't know it): registered for the copy, then by ID again.
+    for (const NcmStorageId sid : {NcmStorageId_SdCard, NcmStorageId_BuiltInUser, NcmStorageId_GameCard}) {
+        if (!registerGame(appId, sid)) continue;
+        rc = fsOpenDataStorageByProgramId(&storage, appId);
+        logLine("  then by program ID: rc=0x" + hex(rc));
+        if (R_SUCCEEDED(rc)) {
+            rc = romfsMountFromStorage(storage, 0, kMount);
+            logLine("  mounted: rc=0x" + hex(rc));
+            if (R_SUCCEEDED(rc)) {
+                asRomfs = true;
+                return true;
+            }
+            fsStorageClose(&storage);
+        }
+        unregisterGame();
+    }
     if (R_FAILED(ncmInitialize())) {
         why = "ncm";
         return false;
@@ -539,6 +593,7 @@ void copyGameMusic(std::uint64_t appId, const std::string& gameName, Progress& p
     }
     if (asRomfs) romfsUnmount(kMount);
     else fsdevUnmountDevice(kMount);
+    unregisterGame();
     logLine("done: " + std::to_string(p.done.load()) + " written, " + std::to_string(p.failed.load()) + " failed");
     p.finished = true;
 }
