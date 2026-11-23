@@ -222,6 +222,12 @@ private:
     bool updateCross(float dt);       // its buttons (false: the bar has them)
     void drawCross(nxui::Renderer& r);
     void drawCrossList(nxui::Renderer& r);
+    // Settings > Cross view > Style: Row (PS4-like): the pages as tabs along
+    // the top, the page's games in one row of tiles, the chosen one big with
+    // its name and facts under it.
+    void drawCrossRow(nxui::Renderer& r);
+    bool crossRowTouch(float x, float y);
+    float m_rowScroll = 0.f; // (the row's first tile shown, easing)
     bool crossTouch(float x, float y);
     std::vector<int> crossPages() const;  // the pages shown, in your order
     int crossCat() const;                 // the category chosen (crossPages().size(): System)

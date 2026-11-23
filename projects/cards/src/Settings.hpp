@@ -108,6 +108,7 @@ struct Settings {
     bool crossNames = true;       // the categories' names under their icons
     bool crossSystemCat = true;   // the System category (last)
     bool crossPlusDetails = true; // + opens the details panel (off: the options, as on the cards)
+    int crossStyle = 0;           // 0 the cross (pages along, games down), 1 a row (pages as tabs, games along: PS4-like)
     // Settings > Grid view.
     int gridLayout = 0;           // 0 5x3 (SwitchU's), 1 4x3, 2 4x2 big, 3 6x4 small
     int gridCursorColour = 0;     // 0 the highlight colour (White: SwitchU's blue), 1 always blue, 2 always the highlight
@@ -293,6 +294,7 @@ struct Settings {
             crossNames = j.value("crossNames", crossNames);
             crossSystemCat = j.value("crossSystemCat", crossSystemCat);
             crossPlusDetails = j.value("crossPlusDetails", crossPlusDetails);
+            crossStyle = std::clamp(j.value("crossStyle", crossStyle), 0, 1);
             gridLayout = std::clamp(j.value("gridLayout", gridLayout), 0, 3);
             gridCursorColour = std::clamp(j.value("gridCursorColour", gridCursorColour), 0, 2);
             gridPill = j.value("gridPill", gridPill);
@@ -357,6 +359,7 @@ struct Settings {
         j["crossNames"] = crossNames;
         j["crossSystemCat"] = crossSystemCat;
         j["crossPlusDetails"] = crossPlusDetails;
+        j["crossStyle"] = crossStyle;
         j["gridLayout"] = gridLayout;
         j["gridCursorColour"] = gridCursorColour;
         j["gridPill"] = gridPill;
