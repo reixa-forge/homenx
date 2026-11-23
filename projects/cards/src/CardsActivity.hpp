@@ -228,6 +228,11 @@ private:
     void drawCrossRow(nxui::Renderer& r);
     bool crossRowTouch(float x, float y);
     float m_rowScroll = 0.f; // (the row's first tile shown, easing)
+    bool m_rowTabs = false;  // the row: up from the games is on the page tabs (left / right change page)
+    float m_rowTabX = 0.f;   // the tabs' scroll (the chosen one kept on screen), easing
+    float m_rowZRepeat = 0.f;
+    std::uint64_t m_rowInfoAsked = 0;
+    void rowTabPlaces(std::vector<float>& x, std::vector<float>& w); // each tab's place along the strip (unscrolled)
     bool crossTouch(float x, float y);
     std::vector<int> crossPages() const;  // the pages shown, in your order
     int crossCat() const;                 // the category chosen (crossPages().size(): System)

@@ -11996,20 +11996,32 @@ void CardsActivity::drawCrossRow(nxui::Renderer& r) {
         r.drawRect({0.f, 0.f, 1280.f, 720.f}, nxui::Color(0.02f, 0.03f, 0.05f, (m_settings.crossBg == 1 ? 0.45f : 0.88f) * intro));
     r.drawGradientRect({0.f, 300.f, 1280.f, 420.f}, nxui::Color(0.f, 0.f, 0.f, 0.f), nxui::Color(0.f, 0.f, 0.f, 0.55f * intro));
 
-    // The page tabs along the top (and System last).
+    // The page tabs along the top (and System last): the strip scrolls to keep
+    // the chosen one in sight; up from the games, they have the focus.
     const auto pages = crossPages();
-    const int cats = static_cast<int>(pages.size()) + (m_settings.crossSystemCat ? 1 : 0);
     const int cat = crossCat();
-    float tx = kRowX;
-    for (int i = 0; i < cats; ++i) {
-        const std::string name = i >= static_cast<int>(pages.size()) ? tr("System") : pageName(pages[(size_t)i]);
-        const bool on = i == cat;
+    std::vector<float> tabX, tabW;
+    rowTabPlaces(tabX, tabW);
+    if (cat >= 0 && cat < static_cast<int>(tabX.size())) {
+        float want = m_rowTabX;
+        if (tabX[(size_t)cat] - want < 0.f) want = tabX[(size_t)cat];                             // (off to the left)
+        if (tabX[(size_t)cat] + tabW[(size_t)cat] - want > 1216.f - kRowX) want = tabX[(size_t)cat] + tabW[(size_t)cat] - (1216.f - kRowX);
+        m_rowTabX += (want - m_rowTabX) * k;
+    }
+    for (size_t i = 0; i < tabX.size(); ++i) {
+        const float x = kRowX + tabX[i] - m_rowTabX;
+        if (x > 1280.f || x + tabW[i] < 0.f) continue;
+        const std::string name = static_cast<int>(i) >= static_cast<int>(pages.size()) ? tr("System") : pageName(pages[i]);
+        const bool on = static_cast<int>(i) == cat;
         nxui::Font& f = on ? m_fLabel : m_fBody;
-        const float w = measured(f, name).x;
-        if (tx > 1240.f) break;
-        textMid(r, f, name, tx, kRowTabsY, kWhite.withAlpha(intro * (on ? 1.f : 0.6f)));
-        if (on) r.drawRoundedRect({tx, kRowTabsY + 16.f, w, 3.f}, accent(intro), 1.5f);
-        tx += w + 34.f;
+        const float edge = std::clamp(std::min(x - 8.f, 1272.f - (x + tabW[i])) / 40.f, 0.f, 1.f); // (fading at the screen's sides)
+        if (on && m_rowTabs) { // the focus: a pill around it
+            const float pulse = 0.8f + 0.2f * std::sin(m_decoTime * 5.f);
+            r.drawRoundedRect({x - 14.f, kRowTabsY - 20.f, tabW[i] + 28.f, 40.f}, accent(0.20f * intro), 20.f);
+            r.drawRoundedRectOutline({x - 14.f, kRowTabsY - 20.f, tabW[i] + 28.f, 40.f}, accent(pulse * intro), 20.f, 2.5f);
+        }
+        textMid(r, f, name, x, kRowTabsY, kWhite.withAlpha(intro * edge * (on ? 1.f : 0.6f)));
+        if (on && !m_rowTabs) r.drawRoundedRect({x, kRowTabsY + 16.f, tabW[i], 3.f}, accent(intro), 1.5f);
     }
 
     // The tiles: the chosen one first on the left, big; the rest after it.
@@ -12044,7 +12056,7 @@ void CardsActivity::drawCrossRow(nxui::Renderer& r) {
         const float a = listA * (x < kRowX - 4.f ? std::clamp(1.f - (kRowX - x) / (small + kRowGap), 0.f, 1.f) : 1.f);
         if (a <= 0.01f) continue;
         const nxui::Rect box{x, kRowY + (big - size), size, size}; // (bottoms lined up)
-        if (chosen) {
+        if (chosen && !m_rowTabs) {
             r.drawRoundedRect({box.x - 5.f, box.y - 5.f, box.width + 10.f, box.height + 10.f}, accent(0.18f * a), 16.f);
             r.drawRoundedRectOutline({box.x - 5.f, box.y - 5.f, box.width + 10.f, box.height + 10.f}, accent(0.95f * a), 16.f, 3.f);
         }
@@ -12108,9 +12120,60 @@ void CardsActivity::drawCrossRow(nxui::Renderer& r) {
         textMid(r, m_fBadge, fit(m_fBadge, note->second, 1150.f), x0, y, accent(0.9f * listA));
         y += 26.f;
     }
-    // The buttons, as hints: A start, + details.
-    textMid(r, m_fBadge, isRunning(g.id) ? "A  Resume      +  Details" : "A  Play      +  Details", x0, std::max(y + 14.f, 640.f),
-            kMuted.withAlpha(0.8f * listA));
+    // What the eShop says about it (kept on the SD card once fetched): who made it,
+    // when, the genre and players; then its description, as much as fits.
+    const auto infoIt = m_infos.find(g.id);
+    if (infoIt != m_infos.end() && infoIt->second.found) {
+        const GameInfo& info = infoIt->second;
+        std::string facts;
+        auto add = [&facts](const std::string& v) {
+            if (v.empty()) return;
+            if (!facts.empty()) facts += "  ·  ";
+            facts += v;
+        };
+        add(info.publisher);
+        add(info.released.substr(0, std::min<size_t>(10, info.released.size())));
+        if (!info.genres.empty()) add(info.genres.front());
+        if (!info.players.empty()) add(trf("{n} players", {info.players}));
+        if (!facts.empty()) {
+            textMid(r, m_fBody, fit(m_fBody, facts, 1150.f), x0, y + 4.f, nxui::Color(1.f, 1.f, 1.f, 0.85f * listA));
+            y += 32.f;
+        }
+        if (!info.description.empty()) {
+            static std::uint64_t wrappedFor = 0;
+            static std::vector<std::string> lines;
+            if (wrappedFor != g.id) { // (wrapped once a game)
+                std::string text = info.description;
+                for (char& c : text) if (c == '\n' || c == '\r') c = ' ';
+                lines = wrap(m_fBody, text, 1150.f);
+                wrappedFor = g.id;
+            }
+            const float bottom = 690.f;
+            const int room = std::max(0, static_cast<int>((bottom - y) / 23.f));
+            for (int l = 0; l < room && l < static_cast<int>(lines.size()); ++l) {
+                std::string line = lines[(size_t)l];
+                if (l == room - 1 && l + 1 < static_cast<int>(lines.size())) line = fit(m_fBody, line + " ...", 1150.f);
+                textMid(r, m_fBody, line, x0, y + 6.f + static_cast<float>(l) * 23.f, nxui::Color(1.f, 1.f, 1.f, 0.7f * listA));
+            }
+            y += static_cast<float>(std::min<int>(room, static_cast<int>(lines.size()))) * 23.f;
+        }
+    } else if (!g.homebrew && g.action.empty() && g.id && !m_infos.count(g.id)) {
+        textMid(r, m_fBody, "Looking up this game...", x0, y + 4.f, kMuted.withAlpha(0.6f * listA));
+    }
+}
+
+void CardsActivity::rowTabPlaces(std::vector<float>& x, std::vector<float>& w) {
+    const auto pages = crossPages();
+    const int cats = static_cast<int>(pages.size()) + (m_settings.crossSystemCat ? 1 : 0);
+    const int cat = crossCat();
+    float at = 0.f;
+    for (int i = 0; i < cats; ++i) {
+        const std::string name = i >= static_cast<int>(pages.size()) ? tr("System") : pageName(pages[(size_t)i]);
+        const float width = measured(i == cat ? m_fLabel : m_fBody, name).x;
+        x.push_back(at);
+        w.push_back(width);
+        at += width + 34.f;
+    }
 }
 
 // A tap: a tab goes to its page; a tile is chosen, and tapped again it starts.
@@ -12126,17 +12189,14 @@ bool CardsActivity::crossRowTouch(float x, float y) {
         return true;
     }
     if (y < kRowY - 10.f) { // the tabs
-        const auto pages = crossPages();
-        const int cats = static_cast<int>(pages.size()) + (m_settings.crossSystemCat ? 1 : 0);
-        float tx = kRowX;
-        for (int i = 0; i < cats; ++i) {
-            const std::string name = i >= static_cast<int>(pages.size()) ? tr("System") : pageName(pages[(size_t)i]);
-            const float w = measured(i == crossCat() ? m_fLabel : m_fBody, name).x;
-            if (x >= tx - 10.f && x < tx + w + 10.f) {
-                crossCatTo(i);
+        std::vector<float> tabX, tabW;
+        rowTabPlaces(tabX, tabW);
+        for (size_t i = 0; i < tabX.size(); ++i) {
+            const float tx = kRowX + tabX[i] - m_rowTabX;
+            if (x >= tx - 14.f && x < tx + tabW[i] + 14.f) {
+                crossCatTo(static_cast<int>(i));
                 return true;
             }
-            tx += w + 34.f;
         }
         return true;
     }
@@ -12192,6 +12252,7 @@ void CardsActivity::setCrossView(bool on) {
     m_crossCat = static_cast<float>(crossCat());
     m_crossRow = static_cast<float>(std::max(0, sel()));
     m_rowScroll = m_crossRow;
+    m_rowTabs = false;
     m_crossListIn = m_settings.motion ? 0.f : 1.f;
     m_scroll = static_cast<float>(std::max(0, sel())); // (the cards: where they were)
     m_audio.play(on ? "toggle_on" : "toggle_off");
@@ -12279,7 +12340,10 @@ bool CardsActivity::updateCross(float dt) {
     const bool upDown = in.isDown(B::DUp) || in.isDown(B::LStickU) || in.isDown(B::RStickU);
     const bool downDown = in.isDown(B::DDown) || in.isDown(B::LStickD) || in.isDown(B::RStickD);
 
-    if (m_settings.crossStyle == 1) { // the row: left / right the games, L R / ZL ZR the pages, up the bar
+    if (m_settings.crossStyle == 1) {
+        // The row: left / right the games; ZL / ZR the games too (held: on
+        // and on); up to the page tabs (left / right there change page, down
+        // back to the games, up again the bar); L / R the pages from anywhere.
         int step = leftDown ? -1 : rightDown ? 1 : 0;
         if (step) m_crossVRepeat = 0.32f;
         else if (left || right) {
@@ -12288,22 +12352,46 @@ bool CardsActivity::updateCross(float dt) {
                 m_crossVRepeat = 0.07f;
             }
         }
-        int page = 0;
-        if (in.isDown(B::ZL) || in.isDown(B::L)) page = -1;
-        if (in.isDown(B::ZR) || in.isDown(B::R)) page = 1;
-        if (page) crossCatTo(crossCat() + page);
-        if (upDown) {
-            m_zone = Zone::Top;
+        int zstep = in.isDown(B::ZL) ? -1 : in.isDown(B::ZR) ? 1 : 0;
+        if (zstep) m_rowZRepeat = 0.32f;
+        else if (in.isHeld(B::ZL) || in.isHeld(B::ZR)) {
+            if ((m_rowZRepeat -= dt) <= 0.f) {
+                zstep = in.isHeld(B::ZL) ? -1 : 1;
+                m_rowZRepeat = 0.07f;
+            }
+        }
+        if (in.isDown(B::L)) crossCatTo(crossCat() - 1);
+        if (in.isDown(B::R)) crossCatTo(crossCat() + 1);
+        if (m_rowTabs) {
+            if (step) crossCatTo(crossCat() + step);
+            if (downDown) {
+                m_rowTabs = false;
+                m_audio.play("navigation");
+            } else if (upDown) {
+                m_rowTabs = false;
+                m_zone = Zone::Top;
+                m_audio.play("navigation");
+            }
+            step = 0;
+        } else if (upDown) {
+            m_rowTabs = true;
             m_audio.play("navigation");
-        } else if (step && m_crossSystem) {
+        }
+        if (!step) step = zstep;
+        if (step && m_crossSystem) {
             const int to = std::clamp(m_crossSysSel + step, 0, static_cast<int>(crossSystem().size()) - 1);
             if (to != m_crossSysSel) m_audio.play("navigation");
             m_crossSysSel = to;
         } else if (step && !games().empty()) {
             select(sel() + step);
+            m_crossInfoScroll = 0;
         }
         (void)down;
-        (void)downDown;
+        if (!m_crossSystem) // (its details under it: first in the queue, once each time it's chosen)
+            if (const Game* g = current(); g && g->id != m_rowInfoAsked) {
+                m_rowInfoAsked = g->id;
+                if (!g->homebrew && g->action.empty()) wantInfo(g->id);
+            }
     } else {
     int across = leftDown ? -1 : rightDown ? 1 : 0;
     if (across) m_crossRepeat = 0.35f;
