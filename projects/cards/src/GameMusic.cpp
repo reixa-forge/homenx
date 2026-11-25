@@ -1237,14 +1237,22 @@ bool openGame(std::uint64_t appId, const Keys& keys, Nca& nca, std::string& why)
     } else {
         char rid[33];
         for (int i = 0; i < 16; ++i) std::snprintf(rid + 2 * i, 3, "%02x", h[0x230 + i]);
-        const auto kek = keys.titlekek.find(keyIndex);
-        auto unwrap = [&](const Key& sealed) { // (a title key as tickets keep it: sealed with the titlekek)
-            if (kek == keys.titlekek.end()) return;
-            Aes128Context ecb;
-            aes128ContextCreate(&ecb, kek->second.data(), false);
-            Key key;
-            aes128DecryptBlock(&ecb, key.data(), sealed.data());
-            tries.push_back(key);
+        // A title key as tickets keep it: sealed with a titlekek. The ticket doesn't always
+        // name the same generation as the game's header (Kingdom Hearts: header 21, ticket
+        // sealed otherwise), so every titlekek is tried, the header's first. A wrong one is
+        // caught when the RomFS or compression table fails to read, so trying them all is safe.
+        auto unwrap = [&](const Key& sealed) {
+            auto tryKek = [&](const Key& kek) {
+                Aes128Context ecb;
+                aes128ContextCreate(&ecb, kek.data(), false);
+                Key key;
+                aes128DecryptBlock(&ecb, key.data(), sealed.data());
+                tries.push_back(key);
+            };
+            const auto first = keys.titlekek.find(keyIndex);
+            if (first != keys.titlekek.end()) tryKek(first->second);
+            for (const auto& [index, kek] : keys.titlekek)
+                if (index != keyIndex) tryKek(kek);
         };
         const auto t = keys.title.find(rid);
         if (t != keys.title.end()) {
@@ -1285,7 +1293,7 @@ bool openGame(std::uint64_t appId, const Keys& keys, Nca& nca, std::string& why)
         }
     }
     if (packed && !packWhy.empty()) logLine("compression: " + packWhy);
-    why = "its files couldn't be decrypted (keys too old? run Lockpick_RCM again)";
+    why = "its files couldn't be decrypted with the keys here (the game's key isn't one these keys open)";
     logLine("RomFS: no key gave a RomFS");
     return false;
 }
@@ -1296,6 +1304,34 @@ std::string safeName(std::string s) {
     while (!s.empty() && (s.back() == ' ' || s.back() == '.')) s.pop_back();
     if (s.size() > 60) s.resize(60);
     return s.empty() ? std::string("Game") : s;
+}
+
+// Logs what an Unreal archive is, reading only its header or footer: a .pak's
+// footer (version, whether its index is encrypted) or a .utoc's header (container
+// flags: 2 = encrypted). Nothing is decoded; the log says whether a game needs a key.
+void probeUnreal(Nca& nca, const RomfsFile& f) {
+    const std::string name = lower(f.path);
+    if (name.size() >= 4 && name.compare(name.size() - 4, 4, ".pak") == 0 && f.size >= 256) {
+        std::uint8_t b[256];
+        if (!nca.read(f.offset + f.size - sizeof b, b, sizeof b)) return;
+        for (size_t p = 1; p + 8 <= sizeof b; ++p) {
+            if (le32(b + p) != 0x5A6F12E1u) continue; // (the pak magic, after its encrypted-index byte)
+            logLine("pak " + f.path + ": version " + std::to_string(le32(b + p + 4)) + ", index " +
+                    (b[p - 1] ? "ENCRYPTED" : "plain"));
+            return;
+        }
+        logLine("pak " + f.path + ": no pak footer found in its last bytes");
+    } else if (name.size() >= 5 && name.compare(name.size() - 5, 5, ".utoc") == 0 && f.size >= 0x54) {
+        std::uint8_t b[0x54];
+        if (!nca.read(f.offset, b, sizeof b)) return;
+        if (std::memcmp(b, "-==--==--==--==-", 16) != 0) {
+            logLine("utoc " + f.path + ": no IoStore magic");
+            return;
+        }
+        const std::uint8_t flags = b[0x50];
+        logLine("utoc " + f.path + ": version " + std::to_string(b[16]) + ", flags " + std::to_string(flags) +
+                (flags & 2 ? " ENCRYPTED" : " plain"));
+    }
 }
 
 } // namespace
@@ -1333,6 +1369,7 @@ std::unique_ptr<GameFiles> GameFiles::open(std::uint64_t appId, const std::strin
         }
         g->fileCount = static_cast<int>(all.size());
         std::vector<RomfsFile> barsFiles; // (sound archives: their sounds listed below)
+        int unrealProbes = 0;
         for (RomfsFile& f : all) {
             const std::string name = lower(f.path);
             const auto ends = [&name](const char* e) {
@@ -1362,6 +1399,10 @@ std::unique_ptr<GameFiles> GameFiles::open(std::uint64_t appId, const std::strin
                         ++g->skipped[e];
                         break;
                     }
+                if ((ends(".pak") || ends(".utoc")) && unrealProbes < 4) { // (a few, for the log)
+                    ++unrealProbes;
+                    probeUnreal(*nca, f);
+                }
             }
         }
         // The rest through vgmstream (CRI: .awb / .acb / .hca / .adx, also

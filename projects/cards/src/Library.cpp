@@ -1525,7 +1525,9 @@ std::vector<std::uint8_t> titleArt(const Game& game, const std::string& key, boo
         }
     // The one the stricter search before picked: he liked those (the leaf for
     // Animal Crossing, Tears of the Kingdom's) more than what's found now.
-    if (std::vector<std::uint8_t> old = readFile(base + ".title"); !old.empty()) return old;
+    // (Most games have none: check first, so a missing file isn't counted as a failed read.)
+    if (std::filesystem::exists(base + ".title", ec))
+        if (std::vector<std::uint8_t> old = readFile(base + ".title"); !old.empty()) return old;
     // (".title2": the ones "none" was saved for before are asked again with these.)
     const std::string path = base + ".title2";
     if (std::filesystem::exists(path, ec)) return readFile(path); // empty: SteamGridDB had none
