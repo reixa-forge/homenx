@@ -1281,8 +1281,19 @@ bool openGame(std::uint64_t appId, const Keys& keys, Nca& nca, std::string& why)
         if (packed) {
             std::vector<CompressedPiece> pieces;
             table.resize(static_cast<size_t>(std::min<std::uint64_t>(packSize, 64u << 20)));
-            if (!nca.readSection(packOff, table.data(), table.size()) ||
-                !parseCompressionTable(table, packEntries, pieces, packWhy)) {
+            // The table's offset is read from the section header: it may count from the section's
+            // start or from the NCA's start. Try both; the table's own structure says which is right.
+            bool tableOk = false;
+            const std::uint64_t fromNca = packOff >= nca.sectionStart ? packOff - nca.sectionStart : packOff;
+            for (const std::uint64_t at : {packOff, fromNca}) {
+                if (!nca.readSection(at, table.data(), table.size())) continue;
+                if (parseCompressionTable(table, packEntries, pieces, packWhy)) {
+                    tableOk = true;
+                    logLine("table read at " + std::to_string(at) + (at == packOff ? " (from the section start)" : " (from the NCA start)"));
+                    break;
+                }
+            }
+            if (!tableOk) {
                 // (the wrong key reads garbage) Logged for a look: the table's first bytes, decrypted
                 // (metadata, not a key), with where it sits and why it was refused.
                 char head[40] = {};
