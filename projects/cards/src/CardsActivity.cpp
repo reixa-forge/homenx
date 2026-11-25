@@ -6896,6 +6896,8 @@ void CardsActivity::openUsers() {
     }
 #ifdef SWITCHU_MENU
     items.push_back(friendCodeRow());
+    items.push_back(action("Friend list", [this]() { openSocial(); }));
+    items.back().detail = "Who's online, what they're playing, their profiles";
     items.push_back(action("Add a friend", [this]() {
         openSocial();
         if (m_social) m_social->showAddFriend();
