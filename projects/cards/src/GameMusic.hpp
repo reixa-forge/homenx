@@ -1,6 +1,8 @@
 // GameMusic - a game's own music, copied to the SD card to play on HOME.
 //
-// An installed game's files (its RomFS) are opened read-only, its music
+// An installed game's files (its RomFS) are read through ncm and decrypted
+// with the console's own keys (Lockpick_RCM's prod.keys / title.keys on the
+// SD card: HOME isn't let open them otherwise), its music
 // streams found (Nintendo's formats: .bfstm and .bwav, PCM16 or DSP-ADPCM),
 // and each one written to sdmc:/music/<game>/<name>.wav: once through, then
 // its loop once more fading out. Done in the background; HOME plays them as
@@ -14,6 +16,7 @@
 #pragma once
 
 #include <atomic>
+#include <functional>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -36,6 +39,17 @@ struct Progress {
 
 // The whole job (run it on a thread): open the game, find, convert, close.
 void copyGameMusic(std::uint64_t appId, const std::string& gameName, Progress& p);
+
+// --- the game's files (RomFS), walked through a reader: read(offset, buffer,
+// size) from the RomFS's start. On the Switch the reader decrypts the game's
+// program content as it goes; the tests give it a plain image. ---
+struct RomfsFile {
+    std::string path;          // "/Sound/Stream/x.bfstm"
+    std::uint64_t offset = 0;  // from the RomFS's start
+    std::uint64_t size = 0;
+};
+using ReadAt = std::function<bool(std::uint64_t offset, void* buffer, std::size_t size)>;
+bool listRomfs(const ReadAt& read, std::vector<RomfsFile>& out, std::string& why);
 
 // --- the decoders, on their own (tests) ---
 
