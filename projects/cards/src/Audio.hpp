@@ -1,10 +1,12 @@
 #pragma once
 #include <future>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
 struct _Mix_Music;
+namespace gamemusic { class WavStream; }
 struct Mix_Chunk;
 
 namespace cards {
@@ -46,6 +48,9 @@ public:
     const std::vector<std::string>& allTitles() const { return m_allTitles; }
     // (paths) only: just the songs in `order` (a playlist), else all but `off`.
     void setPlaylist(std::vector<std::string> off, std::vector<std::string> order, bool only = false);
+    void preview(std::vector<unsigned char> song); // a game's song heard now (before it's copied)
+    void stopPreview();                             // and back to the list
+    bool previewing() const { return m_previewing; }
     void rescan();                      // new songs put on the SD card: found, no restart
     bool scanning() const { return m_infoJob.valid(); }
     std::string playingPath() const;
@@ -86,6 +91,9 @@ private:
     long m_playing = -1;  // the one playing
     _Mix_Music* m_current = nullptr;
     std::vector<unsigned char> m_trackData; // the song playing, in memory: SDL reads it, not the SD card
+    std::unique_ptr<gamemusic::WavStream> m_stream; // (or a game's song, decoded as it plays)
+    bool m_previewing = false;
+    void loadData(std::vector<unsigned char> data);
     bool m_isPlaying = false, m_userPaused = false, m_sysPaused = false; // ours: SDL's asks took its lock
     long m_wantTrack = -1, m_jobTrack = -1;  // the song to play next, and the one being read
     std::future<std::vector<unsigned char>> m_trackJob;

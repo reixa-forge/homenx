@@ -282,72 +282,147 @@ void decodeDspFrame(const std::uint8_t* f, const std::int16_t* coefs, std::int16
     }
 }
 
-bool convert(const std::vector<std::uint8_t>& file, const std::string& outPath, std::string& why) {
+// ---------------------------------------------------------------- as a WAV, on demand
+
+struct WavStream::Impl {
+    std::vector<std::uint8_t> file;
     Parsed p;
-    const std::string m = magic(file);
+    std::uint32_t first = 0, again = 0, fade = 0, total = 0;
+    std::vector<std::uint8_t> head;
+    // The decoded samples, a piece at a time: bytes [bufStart, bufStart + buf.size()) of the data.
+    std::vector<std::uint8_t> buf;
+    std::uint64_t bufStart = 0;
+    std::uint32_t frame = 0;          // the next frame to decode (0 .. total)
+    std::vector<Channel> fresh;       // the channels as parsed (to start again)
+    std::vector<std::int16_t> chan;
+
+    void restart() {
+        p.ch = fresh;
+        frame = 0;
+        buf.clear();
+        bufStart = 0;
+    }
+
+    // The next piece (up to 4096 frames) into buf.
+    bool decodeNext() {
+        if (frame >= total) return false;
+        const int chans = static_cast<int>(p.ch.size());
+        bufStart += buf.size();
+        if (frame == first && again) // (on into the loop again)
+            for (Channel& ch : p.ch) ch.toLoop(p.info.loopStart);
+        const std::uint32_t passEnd = frame < first ? first : total;
+        const std::uint32_t n = std::min<std::uint32_t>(4096, passEnd - frame);
+        buf.assign(size_t(n) * chans * 2, 0);
+        chan.resize(n);
+        auto* out = reinterpret_cast<std::int16_t*>(buf.data());
+        for (int c = 0; c < chans; ++c) {
+            Channel& ch = p.ch[(size_t)c];
+            if (ch.pendingSkip) {
+                std::int16_t skip[14];
+                ch.read(file, skip, ch.pendingSkip);
+                ch.pendingSkip = 0;
+            }
+            ch.read(file, chan.data(), n);
+            for (std::uint32_t i = 0; i < n; ++i) {
+                int v = chan[i];
+                if (frame >= first) { // fading out, the second time
+                    const std::uint32_t at = frame + i - first;
+                    if (at + fade >= again)
+                        v = static_cast<int>(static_cast<float>(v) * static_cast<float>(again - at) /
+                                             static_cast<float>(std::max<std::uint32_t>(1, fade)));
+                }
+                out[size_t(i) * chans + c] = static_cast<std::int16_t>(v);
+            }
+        }
+        frame += n;
+        return true;
+    }
+};
+
+WavStream::WavStream() : m(std::make_unique<Impl>()) {}
+WavStream::~WavStream() = default;
+
+std::unique_ptr<WavStream> WavStream::open(std::vector<std::uint8_t> file, std::string& why) {
+    std::unique_ptr<WavStream> w(new WavStream());
+    Impl& i = *w->m;
+    i.file = std::move(file);
+    const std::string m = magic(i.file);
     if (m == "FSTM") {
-        if (!parseBfstm(file, p, why)) return false;
+        if (!parseBfstm(i.file, i.p, why)) return nullptr;
     } else if (m == "BWAV") {
-        if (!parseBwav(file, p, why)) return false;
+        if (!parseBwav(i.file, i.p, why)) return nullptr;
     } else {
         why = "not a stream";
-        return false;
+        return nullptr;
     }
-    const Stream& s = p.info;
-    const int chans = static_cast<int>(p.ch.size());
+    const Stream& s = i.p.info;
     // Once through; then, looping, the loop again fading out (8 s, or the
     // loop's length), all of it at most 6 minutes.
     const std::uint32_t maxFrames = static_cast<std::uint32_t>(s.sampleRate) * 360u;
-    const std::uint32_t first = std::min(s.loops ? s.loopEnd : s.samples, maxFrames);
-    std::uint32_t again = 0;
-    if (s.loops && s.loopEnd > s.loopStart && first < maxFrames)
-        again = std::min(s.loopEnd - s.loopStart, maxFrames - first);
-    const std::uint32_t fade = again ? std::min<std::uint32_t>(again, static_cast<std::uint32_t>(s.sampleRate) * 8u) : 0;
-    const std::uint32_t total = first + again;
+    i.first = std::min(s.loops ? s.loopEnd : s.samples, maxFrames);
+    if (s.loops && s.loopEnd > s.loopStart && i.first < maxFrames)
+        i.again = std::min(s.loopEnd - s.loopStart, maxFrames - i.first);
+    i.fade = i.again ? std::min<std::uint32_t>(i.again, static_cast<std::uint32_t>(s.sampleRate) * 8u) : 0;
+    i.total = i.first + i.again;
+    i.head = wavHeader(static_cast<int>(i.p.ch.size()), s.sampleRate, i.total);
+    i.fresh = i.p.ch;
+    return w;
+}
 
+std::uint64_t WavStream::size() const {
+    return m->head.size() + std::uint64_t(m->total) * m->p.ch.size() * 2;
+}
+
+double WavStream::seconds() const {
+    return m->p.info.sampleRate ? static_cast<double>(m->total) / m->p.info.sampleRate : 0.0;
+}
+
+size_t WavStream::read(std::uint64_t off, void* buffer, size_t n) {
+    Impl& i = *m;
+    auto* out = static_cast<std::uint8_t*>(buffer);
+    size_t done = 0;
+    while (done < n && off < size()) {
+        if (off < i.head.size()) {
+            const size_t k = std::min<size_t>(n - done, static_cast<size_t>(i.head.size() - off));
+            std::memcpy(out + done, i.head.data() + off, k);
+            done += k;
+            off += k;
+            continue;
+        }
+        const std::uint64_t d = off - i.head.size();
+        if (d < i.bufStart) i.restart(); // (back: decoded again from the start)
+        while (d >= i.bufStart + i.buf.size())
+            if (!i.decodeNext()) return done;
+        const size_t at = static_cast<size_t>(d - i.bufStart);
+        const size_t k = std::min(n - done, i.buf.size() - at);
+        std::memcpy(out + done, i.buf.data() + at, k);
+        done += k;
+        off += k;
+    }
+    return done;
+}
+
+bool isStream(const std::vector<std::uint8_t>& file) {
+    const std::string m = magic(file);
+    return m == "FSTM" || m == "BWAV";
+}
+
+bool convert(const std::vector<std::uint8_t>& file, const std::string& outPath, std::string& why) {
+    std::unique_ptr<WavStream> w = WavStream::open(file, why);
+    if (!w) return false;
     const std::string tmp = outPath + ".part";
     std::FILE* f = std::fopen(tmp.c_str(), "wb");
     if (!f) {
         why = "can't write to the SD card";
         return false;
     }
-    std::vector<std::uint8_t> head = wavHeader(chans, s.sampleRate, total);
-    bool ok = std::fwrite(head.data(), 1, head.size(), f) == head.size();
-    constexpr std::uint32_t kChunk = 14 * 512;
-    std::vector<std::int16_t> chan(kChunk), mix(size_t(kChunk) * chans);
-    auto pass = [&](std::uint32_t frames, bool fading) {
-        std::uint32_t doneFrames = 0;
-        while (ok && doneFrames < frames) {
-            const std::uint32_t n = std::min(kChunk, frames - doneFrames);
-            for (int c = 0; c < chans; ++c) {
-                Channel& ch = p.ch[(size_t)c];
-                if (ch.pendingSkip) { // (back at the loop mid-frame: its first samples dropped)
-                    std::int16_t skip[14];
-                    ch.read(file, skip, ch.pendingSkip);
-                    ch.pendingSkip = 0;
-                }
-                ch.read(file, chan.data(), n);
-                for (std::uint32_t i = 0; i < n; ++i) {
-                    int v = chan[i];
-                    if (fading) {
-                        const std::uint32_t at = doneFrames + i;
-                        if (at + fade >= frames) {
-                            const float left = static_cast<float>(frames - at) / static_cast<float>(std::max<std::uint32_t>(1, fade));
-                            v = static_cast<int>(static_cast<float>(v) * left);
-                        }
-                    }
-                    mix[size_t(i) * chans + c] = static_cast<std::int16_t>(v);
-                }
-            }
-            // (little-endian on the Switch, as WAV is)
-            ok = std::fwrite(mix.data(), sizeof(std::int16_t), size_t(n) * chans, f) == size_t(n) * chans;
-            doneFrames += n;
-        }
-    };
-    pass(first, false);
-    if (again) {
-        for (Channel& ch : p.ch) ch.toLoop(s.loopStart);
-        pass(again, true);
+    std::vector<std::uint8_t> piece(64 * 1024);
+    bool ok = true;
+    for (std::uint64_t off = 0; ok && off < w->size();) {
+        const size_t got = w->read(off, piece.data(), piece.size());
+        if (!got) break;
+        ok = std::fwrite(piece.data(), 1, got, f) == got;
+        off += got;
     }
     ok = std::fclose(f) == 0 && ok;
     std::error_code ec;
@@ -603,6 +678,7 @@ bool looksLikeRomfs(Nca& nca) {
 bool openGame(std::uint64_t appId, const Keys& keys, Nca& nca, std::string& why) {
     if (R_FAILED(ncmInitialize())) { why = "ncm"; return false; }
     bool found = false;
+    std::vector<std::uint8_t> h(0xC00);
     for (const NcmStorageId sid : {NcmStorageId_SdCard, NcmStorageId_BuiltInUser, NcmStorageId_GameCard}) {
         NcmContentMetaDatabase db;
         if (R_FAILED(ncmOpenContentMetaDatabase(&db, sid))) continue;
@@ -615,15 +691,18 @@ bool openGame(std::uint64_t appId, const Keys& keys, Nca& nca, std::string& why)
         if (R_FAILED(ncmOpenContentStorage(&nca.cs, sid))) continue;
         nca.cid = cid;
         nca.open = true;
+        if (!nca.readRaw(0, h.data(), h.size())) { // (listed, but not readable there: the next place)
+            logLine("program content on storage " + std::to_string(static_cast<int>(sid)) + ": couldn't be read");
+            ncmContentStorageClose(&nca.cs);
+            nca.open = false;
+            continue;
+        }
         found = true;
         logLine("program content on storage " + std::to_string(static_cast<int>(sid)));
         break;
     }
     ncmExit();
-    if (!found) { why = "its files weren't found"; return false; }
-
-    std::vector<std::uint8_t> h(0xC00);
-    if (!nca.readRaw(0, h.data(), h.size())) { why = "its files couldn't be read"; return false; }
+    if (!found) { why = "its files weren't found, or couldn't be read"; return false; }
     Aes128XtsContext xts;
     aes128XtsContextCreate(&xts, keys.header, keys.header + 16, false);
     for (int sector = 0; sector < 6; ++sector) {
@@ -721,102 +800,220 @@ std::string safeName(std::string s) {
 
 } // namespace
 
-void copyGameMusic(std::uint64_t appId, const std::string& gameName, Progress& p) {
-    std::string why;
-    logLine("---- " + gameName + " (" + hex(appId) + ")");
-    const auto fail = [&p, &why]() {
-        logLine("stopped: " + why);
-        std::lock_guard<std::mutex> lk(p.mu);
-        p.error = why;
-        p.finished = true;
-    };
-    auto keys = std::make_unique<Keys>();
-    if (!loadKeys(*keys, why)) return fail();
-    auto nca = std::make_unique<Nca>();
-    if (!openGame(appId, *keys, *nca, why)) return fail();
-    keys.reset();
-    std::vector<RomfsFile> all;
-    if (!listRomfs([&nca](std::uint64_t off, void* buf, size_t n) { return nca->read(off, buf, n); }, all, why)) return fail();
+struct GameFiles::Impl {
+    std::unique_ptr<Nca> nca;
+    std::mutex mu; // (one read at a time: a song heard while others copy)
+};
 
-    // The streams (the whole RomFS: games keep them in different places).
-    std::vector<RomfsFile> streams;
-    for (RomfsFile& f : all) {
-        const std::string name = lower(f.path);
-        const auto ends = [&name](const char* e) {
-            const size_t n = std::strlen(e);
-            return name.size() >= n && name.compare(name.size() - n, n, e) == 0;
-        };
-        if (ends(".bfstm") || ends(".bwav")) streams.push_back(std::move(f));
-        else if (ends(".bwav.zs") || ends(".bfstm.zs") || ends(".bars") || ends(".bars.zs") || ends(".wem") ||
-                 ends(".bnk") || ends(".bank") || ends(".acb") || ends(".awb") || ends(".hca") || ends(".opus") || ends(".lopus"))
-            ++p.skipped;
-    }
-    logLine("files: " + std::to_string(all.size()) + ", streams " + std::to_string(streams.size()) + ", " +
-            std::to_string(p.skipped.load()) + " in other formats");
-    all.clear();
-    all.shrink_to_fit();
-    std::sort(streams.begin(), streams.end(), [](const RomfsFile& a, const RomfsFile& b) { return a.path < b.path; });
-    p.found = static_cast<int>(streams.size());
-    const std::string folder = "sdmc:/music/" + safeName(gameName);
-    {
-        std::lock_guard<std::mutex> lk(p.mu);
-        p.folder = folder;
-    }
-    std::error_code ec;
-    if (!streams.empty()) std::filesystem::create_directories(folder, ec);
-    std::set<std::string> used;
-    for (const RomfsFile& f : streams) {
-        if (p.cancel) break;
-        std::string stem = safeName(std::filesystem::path(f.path).stem().string());
-        for (int n = 2; !used.insert(lower(stem)).second; ++n) // (same name in two folders)
-            stem = safeName(std::filesystem::path(f.path).stem().string()) + " " + std::to_string(n);
-        const std::string out = folder + "/" + stem + ".wav";
-        if (std::filesystem::exists(out, ec)) { // (copied before)
-            ++p.done;
-            std::lock_guard<std::mutex> lk(p.mu);
-            p.files.push_back(out);
-            continue;
+GameFiles::GameFiles() : m(std::make_unique<Impl>()) {}
+GameFiles::~GameFiles() = default;
+
+std::unique_ptr<GameFiles> GameFiles::open(std::uint64_t appId, const std::string& gameName, std::string& why) {
+    try {
+        logLine("---- " + gameName + " (" + hex(appId) + ")");
+        auto keys = std::make_unique<Keys>();
+        if (!loadKeys(*keys, why)) { logLine("stopped: " + why); return nullptr; }
+        std::unique_ptr<GameFiles> g(new GameFiles());
+        g->m->nca = std::make_unique<Nca>();
+        if (!openGame(appId, *keys, *g->m->nca, why)) { logLine("stopped: " + why); return nullptr; }
+        keys.reset();
+        std::vector<RomfsFile> all;
+        Nca* nca = g->m->nca.get();
+        if (!listRomfs([nca](std::uint64_t off, void* buf, size_t n) { return nca->read(off, buf, n); }, all, why)) {
+            logLine("stopped: " + why);
+            return nullptr;
         }
-        if (f.size > 32u * 1024u * 1024u) { // (too big to read in at once in HOME's memory)
-            ++p.failed;
-            logLine("  " + f.path + ": too big (" + std::to_string(f.size / 1048576u) + " MB)");
-            continue;
-        }
-        std::vector<std::uint8_t> data;
-        try {
-            data.resize(static_cast<size_t>(f.size));
-        } catch (const std::bad_alloc&) { // (HOME is short of memory just now)
-            ++p.failed;
-            logLine("  " + f.path + ": no memory for it");
-            continue;
-        }
-        if (!nca->read(f.offset, data.data(), data.size())) {
-            ++p.failed;
-            logLine("  " + f.path + ": couldn't be read");
-            continue;
-        }
-        std::string bad;
-        if (convert(data, out, bad)) {
-            ++p.done;
-            std::lock_guard<std::mutex> lk(p.mu);
-            p.files.push_back(out);
-        } else {
-            ++p.failed;
-            logLine("  " + f.path + ": " + bad);
-            if (bad.rfind("the SD card", 0) == 0) {
-                std::lock_guard<std::mutex> lk(p.mu);
-                p.error = bad;
-                break;
+        g->fileCount = static_cast<int>(all.size());
+        for (RomfsFile& f : all) {
+            const std::string name = lower(f.path);
+            const auto ends = [&name](const char* e) {
+                const size_t n = std::strlen(e);
+                return name.size() >= n && name.compare(name.size() - n, n, e) == 0;
+            };
+            if (ends(".bfstm") || ends(".bwav")) {
+                Song s;
+                s.name = safeName(std::filesystem::path(f.path).stem().string());
+                s.ext = ends(".bfstm") ? ".bfstm" : ".bwav";
+                s.path = std::move(f.path);
+                s.offset = f.offset;
+                s.size = f.size;
+                g->songs.push_back(std::move(s));
+            } else {
+                for (const char* e : {".bwav.zs", ".bfstm.zs", ".bars", ".bars.zs", ".wem", ".bnk", ".bank", ".acb", ".awb", ".hca",
+                                      ".opus", ".lopus", ".pak", ".cpk", ".utoc", ".ucas"})
+                    if (ends(e)) {
+                        ++g->skipped[e];
+                        break;
+                    }
             }
         }
+        std::sort(g->songs.begin(), g->songs.end(), [](const Song& a, const Song& b) { return a.path < b.path; });
+        // Same names in two folders: numbered.
+        std::set<std::string> used;
+        for (Song& s : g->songs) {
+            const std::string base = s.name;
+            for (int n = 2; !used.insert(lower(s.name)).second; ++n) s.name = base + " " + std::to_string(n);
+        }
+        std::string other;
+        for (const auto& [ext, n] : g->skipped) other += " " + ext + " x" + std::to_string(n);
+        logLine("files: " + std::to_string(g->fileCount) + ", songs " + std::to_string(g->songs.size()) +
+                (other.empty() ? "" : ", not read yet:" + other));
+        return g;
+    } catch (const std::exception& e) {
+        why = std::string("it ran out of memory (") + e.what() + ")";
+        logLine("stopped: " + why);
+        return nullptr;
     }
-    logLine("done: " + std::to_string(p.done.load()) + " written, " + std::to_string(p.failed.load()) + " failed");
+}
+
+bool GameFiles::read(const Song& s, std::vector<std::uint8_t>& out, std::string& why) {
+    if (s.size > 48u * 1024u * 1024u) { why = "too big"; return false; }
+    try {
+        out.resize(static_cast<size_t>(s.size));
+    } catch (const std::bad_alloc&) {
+        why = "no memory for it just now";
+        return false;
+    }
+    std::lock_guard<std::mutex> lk(m->mu);
+    if (!m->nca->read(s.offset, out.data(), out.size())) { why = "it couldn't be read"; return false; }
+    return true;
+}
+
+namespace {
+
+// Written with FS itself (not stdio): sdmc:/music/... -> /music/...
+bool writeSd(const std::string& path, const std::vector<std::uint8_t>& data, std::string& why) {
+    FsFileSystem* fs = fsdevGetDeviceFileSystem("sdmc");
+    if (!fs) { why = "the SD card isn't there"; return false; }
+    const std::string p = path.rfind("sdmc:", 0) == 0 ? path.substr(5) : path;
+    const std::string tmp = p + ".part";
+    char name[FS_MAX_PATH];
+    std::snprintf(name, sizeof(name), "%s", tmp.c_str());
+    fsFsDeleteFile(fs, name);
+    if (R_FAILED(fsFsCreateFile(fs, name, static_cast<s64>(data.size()), 0))) { why = "the SD card is full, or couldn't be written"; return false; }
+    FsFile f;
+    if (R_FAILED(fsFsOpenFile(fs, name, FsOpenMode_Write, &f))) { why = "the SD card couldn't be written"; return false; }
+    bool ok = true;
+    for (size_t at = 0; ok && at < data.size();) {
+        const size_t n = std::min<size_t>(data.size() - at, 1u << 20);
+        ok = R_SUCCEEDED(fsFileWrite(&f, static_cast<s64>(at), data.data() + at, n, FsWriteOption_None));
+        at += n;
+    }
+    if (ok) ok = R_SUCCEEDED(fsFileFlush(&f));
+    fsFileClose(&f);
+    if (!ok) {
+        fsFsDeleteFile(fs, name);
+        why = "the SD card is full, or couldn't be written";
+        return false;
+    }
+    char final[FS_MAX_PATH];
+    std::snprintf(final, sizeof(final), "%s", p.c_str());
+    fsFsDeleteFile(fs, final);
+    if (R_FAILED(fsFsRenameFile(fs, name, final))) { why = "the SD card couldn't be written"; return false; }
+    return true;
+}
+
+void makeDir(const std::string& path) {
+    FsFileSystem* fs = fsdevGetDeviceFileSystem("sdmc");
+    if (!fs) return;
+    const std::string p = path.rfind("sdmc:", 0) == 0 ? path.substr(5) : path;
+    for (size_t i = 1; i <= p.size(); ++i)
+        if (i == p.size() || p[i] == '/') {
+            char d[FS_MAX_PATH];
+            std::snprintf(d, sizeof(d), "%s", p.substr(0, i).c_str());
+            fsFsCreateDirectory(fs, d); // (there already: fine)
+        }
+}
+
+} // namespace
+
+std::string songFolder(const std::string& gameName) { return "sdmc:/music/" + safeName(gameName); }
+
+// The chosen songs, as the game has them (.bfstm / .bwav: HOME plays them as
+// they are), under the names chosen.
+void copySongs(GameFiles& g, const std::string& gameName, Progress& p) {
+    try {
+        const std::string folder = songFolder(gameName);
+        {
+            std::lock_guard<std::mutex> lk(p.mu);
+            p.folder = folder;
+        }
+        std::uint64_t need = 0;
+        for (const Song& s : g.songs)
+            if (s.chosen) {
+                ++p.found;
+                need += s.size;
+            }
+        if (FsFileSystem* fs = fsdevGetDeviceFileSystem("sdmc")) {
+            s64 free = 0;
+            if (R_SUCCEEDED(fsFsGetFreeSpace(fs, "/", &free)) && static_cast<std::uint64_t>(free) < need + (64u << 20)) {
+                std::lock_guard<std::mutex> lk(p.mu);
+                p.error = "the SD card hasn't room (" + std::to_string(need >> 20) + " MB needed, " +
+                          std::to_string(static_cast<std::uint64_t>(free) >> 20) + " MB free)";
+                logLine("stopped: " + p.error);
+                p.finished = true;
+                return;
+            }
+        }
+        makeDir(folder);
+        std::error_code ec;
+        for (const Song& s : g.songs) {
+            if (p.cancel) break;
+            if (!s.chosen) continue;
+            const std::string out = folder + "/" + safeName(s.name) + s.ext;
+            if (std::filesystem::exists(out, ec)) { // (copied before)
+                ++p.done;
+                std::lock_guard<std::mutex> lk(p.mu);
+                p.files.push_back(out);
+                continue;
+            }
+            std::vector<std::uint8_t> data;
+            std::string why;
+            if (!g.read(s, data, why)) {
+                ++p.failed;
+                logLine("  " + s.path + ": " + why);
+                continue;
+            }
+            if (!isStream(data)) {
+                ++p.failed;
+                logLine("  " + s.path + ": not a stream it can play");
+                continue;
+            }
+            if (!writeSd(out, data, why)) {
+                ++p.failed;
+                logLine("  " + s.path + ": " + why);
+                std::lock_guard<std::mutex> lk(p.mu);
+                p.error = why;
+                break;
+            }
+            ++p.done;
+            std::lock_guard<std::mutex> lk(p.mu);
+            p.files.push_back(out);
+        }
+        logLine("done: " + std::to_string(p.done.load()) + " copied, " + std::to_string(p.failed.load()) + " failed");
+    } catch (const std::exception& e) {
+        std::lock_guard<std::mutex> lk(p.mu);
+        p.error = std::string("it ran out of memory (") + e.what() + ")";
+        logLine("stopped: " + p.error);
+    }
     p.finished = true;
 }
 
 #else
 
-void copyGameMusic(std::uint64_t, const std::string&, Progress& p) {
+struct GameFiles::Impl {};
+GameFiles::GameFiles() : m(std::make_unique<Impl>()) {}
+GameFiles::~GameFiles() = default;
+std::unique_ptr<GameFiles> GameFiles::open(std::uint64_t, const std::string&, std::string& why) {
+    why = "only on the Switch";
+    return nullptr;
+}
+bool GameFiles::read(const Song&, std::vector<std::uint8_t>&, std::string& why) {
+    why = "only on the Switch";
+    return false;
+}
+std::string songFolder(const std::string& gameName) { return "sdmc:/music/" + gameName; }
+void copySongs(GameFiles&, const std::string&, Progress& p) {
     std::lock_guard<std::mutex> lk(p.mu);
     p.error = "only on the Switch";
     p.finished = true;

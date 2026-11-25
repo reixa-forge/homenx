@@ -284,11 +284,29 @@ private:
     void openAddToPlaylist(const std::string& path);
     void newPlaylist(std::function<void(const std::string&)> then);
     // A game's own music (+ > Copy its music): copied to /music/<game> in the background.
+    // First its files are opened and its songs listed; he chooses, hears and
+    // renames them (openSongPicker); then the chosen ones are copied. One job
+    // on m_gmThread at a time: 1 opening, 2 reading a song to hear, 3 copying.
     std::unique_ptr<gamemusic::Progress> m_gm;
+    std::unique_ptr<gamemusic::GameFiles> m_gmFiles; // the game's songs (while he chooses, and copying)
     std::thread m_gmThread;
     std::string m_gmGame;
+    std::uint64_t m_gmId = 0;
+    std::atomic<int> m_gmJob{0};
+    std::atomic<bool> m_gmJobDone{false};
+    std::mutex m_gmMu;                                  // the job's answer:
+    std::unique_ptr<gamemusic::GameFiles> m_gmOpened;   //  (1) the files
+    std::string m_gmWhy;                                //  (1, 2) why not
+    std::vector<std::uint8_t> m_gmHeard;                //  (2) the song's bytes
+    int m_gmHearing = -1;                               // the song being heard
+    std::string m_gmPickerTitle;
     void copyGameMusic(const Game& game);
+    void gameMusicJob(int job, std::function<void()> work);
+    void checkGameMusicJob();
+    void openSongPicker(int chosen = 0);
+    void openSongOptions(int song);
     void checkGameMusic();
+    void renameSong(const std::string& path, int at);
     nxui::Color gridCursor(float a) const; // the grid's cursor: the highlight colour (White: SwitchU's blue)
     void drawGrid(nxui::Renderer& r);
     void updateGrid(float dt);

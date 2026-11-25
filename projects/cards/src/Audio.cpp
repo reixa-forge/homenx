@@ -1,4 +1,5 @@
 #include "Audio.hpp"
+#include "GameMusic.hpp"
 
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_mixer.h>
@@ -24,6 +25,47 @@ constexpr const char* kSounds = "sdmc:/switch/SwitchU/sounds/wiiu";
 std::atomic<bool> g_trackEnded{false};
 
 void onTrackEnded() { g_trackEnded = true; } // SDL_mixer's thread: just a flag
+
+// A game's song (.bfstm / .bwav) for SDL_mixer: a .wav, decoded as it reads.
+struct StreamRw {
+    gamemusic::WavStream* w;
+    Sint64 pos = 0;
+};
+StreamRw* streamOf(SDL_RWops* rw) { return static_cast<StreamRw*>(rw->hidden.unknown.data1); }
+Sint64 SDLCALL streamSize(SDL_RWops* rw) { return static_cast<Sint64>(streamOf(rw)->w->size()); }
+Sint64 SDLCALL streamSeek(SDL_RWops* rw, Sint64 offset, int whence) {
+    StreamRw* s = streamOf(rw);
+    const Sint64 size = static_cast<Sint64>(s->w->size());
+    Sint64 to = whence == RW_SEEK_SET ? offset : whence == RW_SEEK_CUR ? s->pos + offset : size + offset;
+    if (to < 0) return -1;
+    s->pos = std::min(to, size);
+    return s->pos;
+}
+size_t SDLCALL streamRead(SDL_RWops* rw, void* out, size_t size, size_t count) {
+    if (!size || !count) return 0;
+    StreamRw* s = streamOf(rw);
+    const size_t got = s->w->read(static_cast<std::uint64_t>(s->pos), out, size * count);
+    s->pos += static_cast<Sint64>(got);
+    return got / size;
+}
+size_t SDLCALL streamWrite(SDL_RWops*, const void*, size_t, size_t) { return 0; }
+int SDLCALL streamClose(SDL_RWops* rw) {
+    delete streamOf(rw);
+    SDL_FreeRW(rw);
+    return 0;
+}
+SDL_RWops* streamRw(gamemusic::WavStream* w) {
+    SDL_RWops* rw = SDL_AllocRW();
+    if (!rw) return nullptr;
+    rw->size = streamSize;
+    rw->seek = streamSeek;
+    rw->read = streamRead;
+    rw->write = streamWrite;
+    rw->close = streamClose;
+    rw->type = SDL_RWOPS_UNKNOWN;
+    rw->hidden.unknown.data1 = new StreamRw{w};
+    return rw;
+}
 
 // The bars: every mix SDL makes (4096 samples) is cut into four 1024-sample
 // slices, each one's levels per band kept; the screen shows the slice that's
@@ -286,7 +328,7 @@ void Audio::rescan() {
         auto isSong = [](const std::filesystem::path& p) {
             std::string ext = p.extension().string();
             for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            return ext == ".mp3" || ext == ".ogg" || ext == ".wav";
+            return ext == ".mp3" || ext == ".ogg" || ext == ".wav" || ext == ".bfstm" || ext == ".bwav";
         };
         for (const std::string& dir : {std::string("sdmc:/music"), std::string("sdmc:/config/CardsNX/music"), std::string(kSounds) + "/music"}) {
             std::error_code ec;
@@ -295,7 +337,7 @@ void Audio::rescan() {
             for (; !ec && it != end; it.increment(ec)) {
                 if (it.depth() >= 3) it.disable_recursion_pending();
                 if (it->is_regular_file(ec) && isSong(it->path())) found.push_back(it->path().string());
-                if (found.size() >= 500) break; // (plenty)
+                if (found.size() >= 3000) break; // (plenty)
             }
             std::sort(found.begin(), found.end());
             l.tracks.insert(l.tracks.end(), found.begin(), found.end());
@@ -490,12 +532,7 @@ void Audio::update() {
             Mix_HaltMusic();
             Mix_HookMusicFinished(onTrackEnded);
             g_trackEnded = false;
-            if (m_current) Mix_FreeMusic(m_current);
-            m_current = nullptr;
-            m_trackData = std::move(data); // after the old song let go of its bytes
-            if (!m_trackData.empty())
-                if (SDL_RWops* rw = SDL_RWFromConstMem(m_trackData.data(), static_cast<int>(m_trackData.size())))
-                    m_current = Mix_LoadMUS_RW(rw, 1);
+            loadData(std::move(data));
             m_isPlaying = m_current != nullptr;
             m_userPaused = false;
             m_position = 0.f;
@@ -509,10 +546,66 @@ void Audio::update() {
         loadWanted(); // one asked for while this was read
     }
     sleepWhenQuiet(now);
+    if (m_previewing && g_trackEnded) m_previewing = false; // (the preview ended: the list goes on)
     if (!m_music || m_tracks.empty() || !g_trackEnded.exchange(false)) return;
     m_isPlaying = false;
     if (m_repeat && m_playing >= 0) startTrack(static_cast<size_t>(m_playing));
     else startTrack(m_shuffle && m_tracks.size() > 1 ? shuffled() : m_track);
+}
+
+// The song's bytes to SDL_mixer: an MP3 / OGG / WAV as it is, a game's own
+// (.bfstm / .bwav) through a WavStream. (After the old one let go of its bytes.)
+void Audio::loadData(std::vector<unsigned char> data) {
+    if (m_current) Mix_FreeMusic(m_current);
+    m_current = nullptr;
+    m_stream.reset();
+    m_trackData.clear();
+    if (gamemusic::isStream(data)) {
+        std::string why;
+        m_stream = gamemusic::WavStream::open(std::move(data), why);
+        if (m_stream)
+            if (SDL_RWops* rw = streamRw(m_stream.get())) m_current = Mix_LoadMUS_RW(rw, 1);
+        return;
+    }
+    m_trackData = std::move(data);
+    if (!m_trackData.empty())
+        if (SDL_RWops* rw = SDL_RWFromConstMem(m_trackData.data(), static_cast<int>(m_trackData.size())))
+            m_current = Mix_LoadMUS_RW(rw, 1);
+}
+
+// A song not in the list (a game's, heard before it's copied): played now,
+// and the list goes on after it.
+void Audio::preview(std::vector<unsigned char> data) {
+    if (!m_open) return;
+    m_wantTrack = -1;
+    Mix_HookMusicFinished(nullptr);
+    Mix_HaltMusic();
+    Mix_HookMusicFinished(onTrackEnded);
+    g_trackEnded = false;
+    loadData(std::move(data));
+    m_isPlaying = m_current != nullptr;
+    m_userPaused = false;
+    m_position = 0.f;
+    m_previewing = m_current != nullptr;
+    if (m_current) {
+        Mix_VolumeMusic(MIX_MAX_VOLUME * std::max(m_volume, 40) / 100);
+        wake();
+        Mix_PlayMusic(m_current, 1);
+    }
+}
+
+void Audio::stopPreview() {
+    if (!m_previewing) return;
+    m_previewing = false;
+    Mix_HookMusicFinished(nullptr);
+    Mix_HaltMusic();
+    Mix_HookMusicFinished(onTrackEnded);
+    if (m_current) Mix_FreeMusic(m_current);
+    m_current = nullptr;
+    m_stream.reset();
+    m_isPlaying = false;
+    Mix_VolumeMusic(MIX_MAX_VOLUME * m_volume / 100);
+    if (m_music && !m_tracks.empty()) startTrack(m_playing >= 0 ? static_cast<size_t>(m_playing) : 0);
 }
 
 size_t Audio::shuffled() const {

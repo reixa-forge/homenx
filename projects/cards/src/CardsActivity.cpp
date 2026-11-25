@@ -950,6 +950,7 @@ void CardsActivity::perfLine(const std::string& line) {
 void CardsActivity::onDestroy() {
     if (m_gm) m_gm->cancel = true; // (a game's music being copied: stops after the song it's on)
     if (m_gmThread.joinable()) m_gmThread.join();
+    m_gmFiles.reset();
     m_jobsStop = true; // the network jobs stop early: closing must not wait them out
     {
         std::lock_guard<std::mutex> lk(m_mu);
@@ -4629,7 +4630,7 @@ void CardsActivity::openOptions() {
             items.back().glyph = "dots";
             items.push_back(action("Copy its music", [this, g]() { copyGameMusic(g); }));
             items.back().glyph = "music";
-            items.back().detail = "Its songs to the SD card's music folder and a playlist, to play on HOME";
+            items.back().detail = "Choose its songs, hear them, rename them, then copy them to the SD card's music folder";
             items.back().value = [this, g]() -> std::string {
                 if (!m_gm || m_gmGame != g.name) return {};
                 return std::to_string(m_gm->done.load()) + " / " + std::to_string(m_gm->found.load());
@@ -9702,7 +9703,7 @@ void CardsActivity::perfMark(const char* step) {
 }
 
 void CardsActivity::onUpdate(float dt) {
-    if (m_gm && m_gm->finished) checkGameMusic();
+    checkGameMusicJob();
     // Either stick moves through the games and every CardsNX menu (HomeNX's screens
     // in CardsNX already read their buttons before this).
     app().input().mergeRightStick();
@@ -11970,6 +11971,7 @@ void CardsActivity::openSongMenu(const std::string& path, int at) {
         openMusicManager(at);
     }));
     items.push_back(action("Add to a playlist", [this, path]() { openAddToPlaylist(path); }));
+    items.push_back(action("Rename", [this, path, at]() { renameSong(path, at); }));
     items.push_back(action("Move up", [move]() { move(-1); }));
     items.push_back(action("Move down", [move]() { move(1); }));
     items.push_back(action("Delete from the SD card", [this, apply, path, at]() {
@@ -11991,6 +11993,33 @@ void CardsActivity::openSongMenu(const std::string& path, int at) {
     items.push_back(action("Back", [this, at]() { openMusicManager(at); }));
     const std::string name = std::filesystem::path(path).filename().string();
     openMenu(name, std::move(items));
+}
+
+// The song's file renamed (its kind kept); its place in the order, on / off
+// and the playlists go with it.
+void CardsActivity::renameSong(const std::string& path, int at) {
+    const std::filesystem::path old(path);
+    askText("Rename the song", "Its name on the SD card", old.stem().string(), 60, [this, path, at, old](const std::string& text) {
+        std::string name = text;
+        for (char& c : name)
+            if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|') c = ' ';
+        while (!name.empty() && (name.back() == ' ' || name.back() == '.')) name.pop_back();
+        if (name.empty() || name == old.stem().string()) { openMusicManager(at); return; }
+        const std::string to = (old.parent_path() / (name + old.extension().string())).string();
+        std::error_code ec;
+        if (std::filesystem::exists(to, ec)) { say("There's a song with that name already."); openMusicManager(at); return; }
+        const bool playing = m_audio.playingPath() == path;
+        if (playing) m_audio.skip(1); // (let go of its file)
+        std::filesystem::rename(path, to, ec);
+        if (ec) { say("The song couldn't be renamed."); openMusicManager(at); return; }
+        auto swap = [&](std::vector<std::string>& list) { std::replace(list.begin(), list.end(), path, to); };
+        swap(m_settings.musicOff);
+        swap(m_settings.musicOrder);
+        for (auto& [listName, songs] : m_settings.playlists) swap(songs);
+        m_settings.save();
+        m_audio.rescan();
+        say(trf("Renamed: {name}", {name}));
+    });
 }
 
 // ---------------------------------------------------------------- the row (Cross view > Style > Row)
@@ -12380,43 +12409,210 @@ void CardsActivity::openAddToPlaylist(const std::string& path) {
 // ---------------------------------------------------------------- a game's music
 
 void CardsActivity::copyGameMusic(const Game& game) {
-    if (m_gm) {
+    if (m_gmJob == 3 && m_gm) {
         say(trf("Already copying {game}'s music: {done} of {found}.",
                 {m_gmGame, std::to_string(m_gm->done.load()), std::to_string(m_gm->found.load())}));
         return;
     }
-    const Game g = game;
-    openMenu(trf("Copy {game}'s music to the SD card? It runs in the background; songs take about 30 MB each.", {g.name}),
-             {action("Copy", [this, g]() {
-                  m_gm = std::make_unique<gamemusic::Progress>();
-                  m_gmGame = g.name;
-                  gamemusic::Progress* p = m_gm.get();
-                  const std::uint64_t id = g.id;
-                  const std::string name = g.name;
-                  if (std::FILE* f = std::fopen("sdmc:/config/CardsNX/gamemusic.log", "a")) { // (so a try always shows)
-                      std::fprintf(f, "asked: %s (%016llX)\n", name.c_str(), static_cast<unsigned long long>(id));
-                      std::fclose(f);
-                  }
-                  try {
-                      m_gmThread = std::thread([p, id, name]() {
-                          offScreenCore();
-                          gamemusic::copyGameMusic(id, name, *p);
-                          threadDone();
-                      });
-                  } catch (...) {
-                      m_gm.reset();
-                      notifyCard(g.name, tr("No music copied: it couldn't start"), "music");
-                      return;
-                  }
-                  say(trf("Copying {game}'s music... you can carry on.", {g.name}));
-              }, true),
-              action("Cancel", [] {})});
+    if (m_gmJob) { say("Wait a moment: still looking at the last game's music."); return; }
+    if (m_gmFiles && m_gmId == game.id) { openSongPicker(); return; } // (still open)
+    m_audio.stopPreview();
+    m_gmFiles.reset();
+    m_gmGame = game.name;
+    m_gmId = game.id;
+    m_gmHearing = -1;
+    const std::uint64_t id = game.id;
+    const std::string name = game.name;
+    if (std::FILE* f = std::fopen("sdmc:/config/CardsNX/gamemusic.log", "a")) { // (so a try always shows)
+        std::fprintf(f, "asked: %s (%016llX)\n", name.c_str(), static_cast<unsigned long long>(id));
+        std::fclose(f);
+    }
+    gameMusicJob(1, [this, id, name]() {
+        std::string why;
+        std::unique_ptr<gamemusic::GameFiles> files = gamemusic::GameFiles::open(id, name, why);
+        std::lock_guard<std::mutex> lk(m_gmMu);
+        m_gmOpened = std::move(files);
+        m_gmWhy = why;
+    });
+    say(trf("Looking for {game}'s music...", {name}));
+}
+
+// The job on its thread; m_gmJobDone when it's done (onUpdate looks).
+void CardsActivity::gameMusicJob(int job, std::function<void()> work) {
+    if (m_gmThread.joinable()) m_gmThread.join();
+    m_gmJob = job;
+    m_gmJobDone = false;
+    try {
+        m_gmThread = std::thread([this, work = std::move(work)]() {
+            offScreenCore();
+            work();
+            threadDone();
+            m_gmJobDone = true;
+        });
+    } catch (...) {
+        m_gmJob = 0;
+        notifyCard(m_gmGame, tr("No music copied: it couldn't start"), "music");
+    }
+}
+
+void CardsActivity::checkGameMusicJob() {
+    if (!m_gmJob || !m_gmJobDone) return;
+    if (m_gmThread.joinable()) m_gmThread.join();
+    const int job = m_gmJob.exchange(0);
+    m_gmJobDone = false;
+    if (job == 1) {
+        std::string why;
+        {
+            std::lock_guard<std::mutex> lk(m_gmMu);
+            m_gmFiles = std::move(m_gmOpened);
+            why = m_gmWhy;
+        }
+        if (!m_gmFiles) { notifyCard(m_gmGame, trf("No music copied: {why}", {why}), "music"); return; }
+        if (m_gmFiles->songs.empty()) {
+            std::string kinds;
+            for (const auto& [ext, n] : m_gmFiles->skipped) kinds += (kinds.empty() ? "" : ", ") + ext;
+            notifyCard(m_gmGame,
+                       kinds.empty() ? tr("No music found in this game")
+                                     : trf("Its music is in a format that can't be read yet ({kinds})", {kinds}), "music");
+            m_gmFiles.reset();
+            return;
+        }
+        openSongPicker();
+    } else if (job == 2) {
+        std::vector<std::uint8_t> song;
+        std::string why;
+        {
+            std::lock_guard<std::mutex> lk(m_gmMu);
+            song = std::move(m_gmHeard);
+            why = m_gmWhy;
+        }
+        if (song.empty()) { say(trf("It can't be played: {why}", {why})); m_gmHearing = -1; return; }
+        const bool had = m_audio.previewing();
+        m_audio.setMusic(true, m_settings.musicVolume);
+        m_audio.preview(std::move(song));
+        if (!m_audio.previewing()) { say("It can't be played."); m_gmHearing = -1; }
+        else if (!m_menu.empty() && m_menuTitle == m_gmPickerTitle) // (the picker open: its "Stop listening" row, the song marked)
+            openSongPicker(m_menuSel + (had ? 0 : 1));
+    } else if (job == 3) {
+        checkGameMusic();
+    }
+}
+
+// The game's songs: choose (A on one: hear it, leave it out, rename it), then copy.
+void CardsActivity::openSongPicker(int chosen) {
+    if (!m_gmFiles) return;
+    auto& songs = m_gmFiles->songs;
+    std::vector<MenuItem> items;
+    items.push_back(action("Copy the chosen songs", [this]() {
+        if (!m_gmFiles || m_gmJob) return;
+        int n = 0;
+        for (const auto& s : m_gmFiles->songs) n += s.chosen;
+        if (!n) { say("Choose a song first."); openSongPicker(); return; }
+        m_audio.stopPreview();
+        m_gmHearing = -1;
+        m_gm = std::make_unique<gamemusic::Progress>();
+        gamemusic::Progress* p = m_gm.get();
+        gamemusic::GameFiles* files = m_gmFiles.get();
+        const std::string name = m_gmGame;
+        gameMusicJob(3, [p, files, name]() { gamemusic::copySongs(*files, name, *p); });
+        say(trf("Copying {n} of {game}'s songs... you can carry on.", {std::to_string(n), name}));
+    }));
+    items.back().glyph = "download";
+    items.back().value = [this]() -> std::string {
+        if (!m_gmFiles) return {};
+        int n = 0;
+        std::uint64_t bytes = 0;
+        for (const auto& s : m_gmFiles->songs)
+            if (s.chosen) { ++n; bytes += s.size; }
+        return std::to_string(n) + " · " + std::to_string(bytes >> 20) + " MB";
+    };
+    items.push_back(action("Choose all", [this]() {
+        for (auto& s : m_gmFiles->songs) s.chosen = true;
+        openSongPicker(1);
+    }));
+    items.push_back(action("Choose none", [this]() {
+        for (auto& s : m_gmFiles->songs) s.chosen = false;
+        openSongPicker(2);
+    }));
+    if (m_audio.previewing()) {
+        items.push_back(action("Stop listening", [this]() {
+            m_audio.stopPreview();
+            m_gmHearing = -1;
+            openSongPicker(3);
+        }));
+        items.back().glyph = "pause";
+    }
+    const int first = static_cast<int>(items.size());
+    for (size_t i = 0; i < songs.size(); ++i) {
+        const int k = static_cast<int>(i);
+        items.push_back(action(songs[i].name, [this, k]() { openSongOptions(k); }));
+        items.back().glyph = k == m_gmHearing && m_audio.previewing() ? "play" : "music";
+        items.back().value = [this, k]() -> std::string {
+            if (!m_gmFiles || k >= static_cast<int>(m_gmFiles->songs.size())) return {};
+            return tr(m_gmFiles->songs[(size_t)k].chosen ? "On" : "Off");
+        };
+    }
+    items.push_back(action("Done", [this]() {
+        m_audio.stopPreview();
+        m_gmHearing = -1;
+        if (!m_gmJob) m_gmFiles.reset(); // (its files closed)
+    }));
+    m_gmPickerTitle = trf("{game} · {n} songs", {m_gmGame, std::to_string(songs.size())});
+    openMenu(m_gmPickerTitle, std::move(items));
+    (void)first;
+    m_menuSel = std::clamp(chosen, 0, static_cast<int>(m_menu.size()) - 1);
+}
+
+void CardsActivity::openSongOptions(int k) {
+    if (!m_gmFiles || k < 0 || k >= static_cast<int>(m_gmFiles->songs.size())) return;
+    const int row = k + (m_audio.previewing() ? 4 : 3); // (its row in the picker)
+    const gamemusic::Song& s = m_gmFiles->songs[(size_t)k];
+    std::vector<MenuItem> items;
+    items.push_back(action("Listen", [this, k, row]() {
+        if (m_gmJob) { say("Wait a moment..."); return; }
+        m_gmHearing = k;
+        gamemusic::GameFiles* files = m_gmFiles.get();
+        const gamemusic::Song song = files->songs[(size_t)k];
+        gameMusicJob(2, [this, files, song]() {
+            std::vector<std::uint8_t> data;
+            std::string why;
+            if (!files->read(song, data, why)) data.clear();
+            else if (!gamemusic::isStream(data)) { data.clear(); why = "not a song it can play"; }
+            std::lock_guard<std::mutex> lk(m_gmMu);
+            m_gmHeard = std::move(data);
+            m_gmWhy = why;
+        });
+        openSongPicker(row);
+    }));
+    items.back().glyph = "play";
+    items.push_back(action(s.chosen ? "Leave it out" : "Choose it", [this, k, row]() {
+        auto& song = m_gmFiles->songs[(size_t)k];
+        song.chosen = !song.chosen;
+        openSongPicker(row);
+    }));
+    items.back().glyph = "check";
+    items.push_back(action("Rename", [this, k, row]() {
+        const std::string now = m_gmFiles->songs[(size_t)k].name;
+        askText("Rename the song", "Its name on the SD card", now, 60, [this, k, row](const std::string& text) {
+            if (!m_gmFiles || k >= static_cast<int>(m_gmFiles->songs.size())) return;
+            std::string name = text;
+            for (char& c : name)
+                if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|') c = ' ';
+            while (!name.empty() && (name.back() == ' ' || name.back() == '.')) name.pop_back();
+            if (!name.empty()) m_gmFiles->songs[(size_t)k].name = name;
+            openSongPicker(row);
+        });
+    }));
+    items.back().glyph = "tag";
+    items.push_back(action("Back", [this, row]() { openSongPicker(row); }));
+    openMenu(s.name + " · " + std::to_string(std::max<std::uint64_t>(1, s.size >> 20)) + " MB", std::move(items));
 }
 
 // Done: its songs found by the music player, a playlist of them, and a word.
 void CardsActivity::checkGameMusic() {
-    if (m_gmThread.joinable()) m_gmThread.join();
     std::unique_ptr<gamemusic::Progress> p = std::move(m_gm);
+    m_gmFiles.reset(); // (its files closed)
+    if (!p) return;
     std::vector<std::string> files;
     std::string error;
     {
@@ -12434,9 +12630,7 @@ void CardsActivity::checkGameMusic() {
     } else if (!error.empty()) {
         notifyCard(m_gmGame, trf("No music copied: {why}", {error}), "music");
     } else {
-        notifyCard(m_gmGame,
-                   p->skipped > 0 ? tr("Its music is in a format that can't be read yet")
-                                  : tr("No music found in this game"), "music");
+        notifyCard(m_gmGame, tr("No music copied"), "music");
     }
 }
 

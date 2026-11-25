@@ -17,6 +17,8 @@
 
 #include <atomic>
 #include <functional>
+#include <map>
+#include <memory>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -37,8 +39,30 @@ struct Progress {
     std::vector<std::string> files; // the songs written (paths)
 };
 
-// The whole job (run it on a thread): open the game, find, convert, close.
-void copyGameMusic(std::uint64_t appId, const std::string& gameName, Progress& p);
+// A game's songs: its files opened (on a thread: it takes a second or two),
+// the songs listed; any one read (to hear it); the chosen ones copied.
+struct Song {
+    std::string path;              // in the game
+    std::uint64_t offset = 0, size = 0;
+    std::string name;              // the file's name on the SD card (he can change it)
+    std::string ext;               // ".bfstm" / ".bwav"
+    bool chosen = true;
+};
+class GameFiles {
+public:
+    static std::unique_ptr<GameFiles> open(std::uint64_t appId, const std::string& gameName, std::string& why);
+    ~GameFiles();
+    bool read(const Song& song, std::vector<std::uint8_t>& out, std::string& why);
+    std::vector<Song> songs;
+    std::map<std::string, int> skipped; // files in formats not read yet, by kind
+    int fileCount = 0;
+private:
+    GameFiles();
+    struct Impl;
+    std::unique_ptr<Impl> m;
+};
+std::string songFolder(const std::string& gameName);               // sdmc:/music/<game>
+void copySongs(GameFiles& files, const std::string& gameName, Progress& p); // (a thread)
 
 // --- the game's files (RomFS), walked through a reader: read(offset, buffer,
 // size) from the RomFS's start. On the Switch the reader decrypts the game's
@@ -60,6 +84,23 @@ struct Stream {
     bool loops = false;
     std::uint32_t loopStart = 0, loopEnd = 0;
 };
+
+// A .bfstm / .bwav seen as a .wav (16-bit), decoded as it's read: once
+// through, then (a looping one) the loop again fading out, at most 6 minutes.
+// HOME plays the game's own files with it (they're 3-4x smaller than WAVs).
+class WavStream {
+public:
+    static std::unique_ptr<WavStream> open(std::vector<std::uint8_t> file, std::string& why);
+    ~WavStream();
+    std::uint64_t size() const;                              // the whole .wav, its header too
+    std::size_t read(std::uint64_t offset, void* buffer, std::size_t size); // (any order: back means from the start)
+    double seconds() const;
+private:
+    WavStream();
+    struct Impl;
+    std::unique_ptr<Impl> m;
+};
+bool isStream(const std::vector<std::uint8_t>& file); // a .bfstm / .bwav it can read
 
 // Reads a .bfstm or .bwav from memory and writes a .wav (16-bit) to `out`.
 // False (and why) when the file isn't one it can read.
