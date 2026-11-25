@@ -46,7 +46,8 @@ struct Song {
     std::string path;              // in the game
     std::uint64_t offset = 0, size = 0;
     std::string name;              // the file's name on the SD card (he can change it)
-    std::string ext;               // ".bfstm" / ".bwav"
+    std::string ext;               // ".bfstm" / ".bwav" (as it's copied: a .zs one decompressed)
+    bool zs = false;               // compressed in the game (zstd)
     bool chosen = true;
 };
 class GameFiles {
@@ -99,6 +100,13 @@ private:
 };
 // LZ4 block (no frame): false if it doesn't come out exactly dstSize.
 bool lz4Block(const std::uint8_t* src, std::size_t srcSize, std::uint8_t* dst, std::size_t dstSize);
+
+// A SARC archive's files (Nintendo's: little- or big-endian).
+struct SarcFile {
+    std::string name;
+    std::size_t offset = 0, size = 0;
+};
+bool sarcFiles(const std::vector<std::uint8_t>& data, std::vector<SarcFile>& out);
 
 // --- the decoders, on their own (tests) ---
 

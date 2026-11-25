@@ -1,5 +1,6 @@
 // GameMusic - see GameMusic.hpp.
 #include "GameMusic.hpp"
+#include "Zstd.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -486,6 +487,39 @@ bool listRomfs(const ReadAt& read, std::vector<RomfsFile>& out, std::string& why
             todo.push_back({c, t.path + "/" + std::string(reinterpret_cast<const char*>(e + 0x18), len)});
             c = le32(e + 4);
         }
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------- SARC
+
+bool sarcFiles(const std::vector<std::uint8_t>& d, std::vector<SarcFile>& out) {
+    if (d.size() < 0x20 || std::memcmp(d.data(), "SARC", 4) != 0) return false;
+    const bool big = d[6] == 0xFE && d[7] == 0xFF;
+    auto u16 = [&](size_t o) -> std::uint32_t { return o + 2 > d.size() ? 0 : big ? (d[o] << 8 | d[o + 1]) : (d[o] | d[o + 1] << 8); };
+    auto u32 = [&](size_t o) -> std::uint32_t {
+        if (o + 4 > d.size()) return 0;
+        return big ? (std::uint32_t(d[o]) << 24 | std::uint32_t(d[o + 1]) << 16 | std::uint32_t(d[o + 2]) << 8 | d[o + 3]) : le32(&d[o]);
+    };
+    const std::uint32_t dataStart = u32(0xC);
+    const size_t sfat = u16(4);
+    if (sfat + 0xC > d.size() || std::memcmp(&d[sfat], "SFAT", 4) != 0) return false;
+    const std::uint32_t count = u16(sfat + 6);
+    const size_t nodes = sfat + u16(sfat + 4), sfnt = nodes + size_t(count) * 16;
+    if (sfnt + 8 > d.size() || std::memcmp(&d[sfnt], "SFNT", 4) != 0) return false;
+    const size_t names = sfnt + u16(sfnt + 4);
+    for (std::uint32_t i = 0; i < count; ++i) {
+        const size_t n = nodes + size_t(i) * 16;
+        const std::uint32_t attr = u32(n + 4), start = u32(n + 8), end = u32(n + 12);
+        SarcFile f;
+        if (attr >> 24) {
+            const size_t at = names + size_t(attr & 0xFFFF) * 4;
+            for (size_t k = at; k < d.size() && d[k]; ++k) f.name.push_back(static_cast<char>(d[k]));
+        }
+        f.offset = size_t(dataStart) + start;
+        f.size = end >= start ? end - start : 0;
+        if (f.offset + f.size > d.size()) return false;
+        out.push_back(std::move(f));
     }
     return true;
 }
@@ -981,6 +1015,7 @@ std::string safeName(std::string s) {
 struct GameFiles::Impl {
     std::unique_ptr<Nca> nca;
     std::mutex mu; // (one read at a time: a song heard while others copy)
+    std::vector<std::unique_ptr<zstd::Dictionary>> dicts; // (the game's own, for its .zs files)
 };
 
 GameFiles::GameFiles() : m(std::make_unique<Impl>()) {}
@@ -1008,16 +1043,20 @@ std::unique_ptr<GameFiles> GameFiles::open(std::uint64_t appId, const std::strin
                 const size_t n = std::strlen(e);
                 return name.size() >= n && name.compare(name.size() - n, n, e) == 0;
             };
-            if (ends(".bfstm") || ends(".bwav")) {
+            const bool zs = ends(".bfstm.zs") || ends(".bwav.zs");
+            if (zs || ends(".bfstm") || ends(".bwav")) {
                 Song s;
-                s.name = safeName(std::filesystem::path(f.path).stem().string());
-                s.ext = ends(".bfstm") ? ".bfstm" : ".bwav";
+                std::filesystem::path stem = std::filesystem::path(f.path).stem(); // (x.bwav.zs: x.bwav)
+                if (zs) stem = stem.stem();
+                s.name = safeName(stem.string());
+                s.ext = (ends(".bfstm") || ends(".bfstm.zs")) ? ".bfstm" : ".bwav";
                 s.path = f.path;
                 s.offset = f.offset;
                 s.size = f.size;
+                s.zs = zs;
                 g->songs.push_back(std::move(s));
             } else {
-                for (const char* e : {".bwav.zs", ".bfstm.zs", ".bars", ".bars.zs", ".wem", ".bnk", ".bank", ".acb", ".awb", ".hca",
+                for (const char* e : {".bars", ".bars.zs", ".wem", ".bnk", ".bank", ".acb", ".awb", ".hca",
                                       ".opus", ".lopus", ".pak", ".cpk", ".utoc", ".ucas"})
                     if (ends(e)) {
                         ++g->skipped[e];
@@ -1025,12 +1064,36 @@ std::unique_ptr<GameFiles> GameFiles::open(std::uint64_t appId, const std::strin
                     }
             }
         }
+        // Compressed songs (.zs): the game's zstd dictionaries, from
+        // Pack/ZsDic.pack.zs (itself compressed without one) where it has them.
+        if (std::any_of(g->songs.begin(), g->songs.end(), [](const Song& x) { return x.zs; })) {
+            for (const RomfsFile& f : all) {
+                if (lower(std::filesystem::path(f.path).filename().string()) != "zsdic.pack.zs" || f.size > (64u << 20)) continue;
+                std::vector<std::uint8_t> packed(static_cast<size_t>(f.size)), pack;
+                std::string zwhy;
+                if (!nca->read(f.offset, packed.data(), packed.size()) || !zstd::decompress(packed.data(), packed.size(), pack, {}, zwhy)) {
+                    logLine("zstd dictionaries: " + f.path + " couldn't be read (" + zwhy + ")");
+                    break;
+                }
+                std::vector<SarcFile> files;
+                if (!sarcFiles(pack, files)) { logLine("zstd dictionaries: not a SARC"); break; }
+                for (const SarcFile& sf : files) {
+                    auto dict = std::make_unique<zstd::Dictionary>();
+                    if (zstd::loadDictionary(pack.data() + sf.offset, sf.size, *dict, zwhy)) {
+                        logLine("zstd dictionary " + sf.name + " (ID " + std::to_string(dict->id) + ")");
+                        g->m->dicts.push_back(std::move(dict));
+                    }
+                }
+                break;
+            }
+        }
         // A game with hundreds: its sound effects among them. Under ~10 seconds
-        // (512 KB of DSP-ADPCM stereo) left out.
+        // (512 KB of DSP-ADPCM stereo, a quarter of that compressed) left out.
         size_t shortOnes = 0;
         if (g->songs.size() > 300) {
             const size_t before = g->songs.size();
-            g->songs.erase(std::remove_if(g->songs.begin(), g->songs.end(), [](const Song& x) { return x.size < 512u * 1024u; }),
+            g->songs.erase(std::remove_if(g->songs.begin(), g->songs.end(),
+                                          [](const Song& x) { return x.size < (x.zs ? 128u : 512u) * 1024u; }),
                            g->songs.end());
             shortOnes = before - g->songs.size();
         }
@@ -1080,6 +1143,30 @@ bool GameFiles::read(const Song& s, std::vector<std::uint8_t>& out, std::string&
     }
     std::lock_guard<std::mutex> lk(m->mu);
     if (!m->nca->read(s.offset, out.data(), out.size())) { why = "it couldn't be read"; return false; }
+    if (!s.zs) return true;
+    // Compressed: with the dictionary its frame names, else (naming none) on
+    // its own, then each of the game's.
+    std::vector<std::uint8_t> plain;
+    std::vector<const zstd::Dictionary*> all;
+    for (const auto& d : m->dicts) all.push_back(d.get());
+    const std::uint32_t id = zstd::frameDictionary(out.data(), out.size());
+    bool ok = false;
+    try {
+        if (id) {
+            ok = zstd::decompress(out.data(), out.size(), plain, all, why, 96u << 20);
+        } else {
+            ok = zstd::decompress(out.data(), out.size(), plain, {}, why, 96u << 20);
+            for (size_t i = 0; !ok && i < all.size(); ++i) {
+                plain.clear();
+                ok = zstd::decompress(out.data(), out.size(), plain, {all[i]}, why, 96u << 20);
+            }
+        }
+    } catch (const std::bad_alloc&) {
+        why = "no memory for it just now";
+        return false;
+    }
+    if (!ok) { why = "it couldn't be decompressed (" + why + ")"; return false; }
+    out = std::move(plain);
     return true;
 }
 
