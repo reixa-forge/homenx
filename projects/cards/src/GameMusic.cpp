@@ -384,7 +384,11 @@ std::uint64_t g_fakePid = 0; // the registration made for the copy (unregistered
 // only for programs it has registered ("not found", 2002-6605, otherwise).
 // Access as the menu's own: all of it (read-only use).
 bool registerGame(std::uint64_t appId, NcmStorageId sid) {
-    if (R_FAILED(fsprInitialize())) return false;
+    const Result init = fsprInitialize();
+    if (R_FAILED(init)) {
+        logLine("fs program registry (fsp-pr): rc=0x" + hex(init));
+        return false;
+    }
     struct __attribute__((packed)) Fah { // the ACI's FS access header
         u8 version = 1;
         u8 pad[3] = {};
@@ -471,6 +475,10 @@ bool mountGame(std::uint64_t appId, bool& asRomfs, std::string& why) {
             FsFileSystem fs;
             Result r4 = fsOpenFileSystemWithId(&fs, appId, FsFileSystemType_ContentData, path, FsContentAttributes_All);
             logLine("storage " + std::to_string(static_cast<int>(sid)) + ": " + path + " rc=0x" + hex(r4));
+            if (R_FAILED(r4)) { // the program content's own RomFS (FS's "Rom" kind, 1: not named in libnx)
+                r4 = fsOpenFileSystemWithId(&fs, appId, static_cast<FsFileSystemType>(1), path, FsContentAttributes_All);
+                logLine("  as its RomFS: rc=0x" + hex(r4));
+            }
             if (R_SUCCEEDED(r4)) {
                 if (fsdevMountDevice(kMount, fs) >= 0) {
                     ok = true;
