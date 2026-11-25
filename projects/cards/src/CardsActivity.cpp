@@ -4492,6 +4492,7 @@ void CardsActivity::handleHome() {
 void CardsActivity::openMenu(std::string title, std::vector<MenuItem> items) {
     m_menuTitle = std::move(title);
     m_menu = std::move(items);
+    m_menuBack = nullptr;
     m_menuSel = 0;
     m_menuIn = m_settings.motion ? 0.f : 1.f;
     m_audio.play("show_modal");
@@ -9193,11 +9194,20 @@ void CardsActivity::keepTextCachesSmall() {
 
 bool CardsActivity::updatePopup() {
     if (m_menu.empty()) return false;
-    listInput(m_menu, m_menuSel, [this]() { m_menu.clear(); });
+    listInput(m_menu, m_menuSel, [this]() {
+        m_menu.clear();
+        m_menuBack = nullptr;
+    }, [this]() {
+        auto back = std::move(m_menuBack); // (B: the list before, when there is one)
+        m_menuBack = nullptr;
+        m_menu.clear();
+        if (back) back();
+    });
     return true;
 }
 
-void CardsActivity::listInput(std::vector<MenuItem>& items, int& sel, const std::function<void()>& close) {
+void CardsActivity::listInput(std::vector<MenuItem>& items, int& sel, const std::function<void()>& close,
+                             const std::function<void()>& back) {
     auto& in = app().input();
     using B = nxui::Button;
     const int n = static_cast<int>(items.size());
@@ -9220,7 +9230,18 @@ void CardsActivity::listInput(std::vector<MenuItem>& items, int& sel, const std:
     }
     if (in.isDown(B::B)) {
         m_audio.play("hide_modal");
-        close();
+        if (back) back();
+        else close();
+        return;
+    }
+    if (in.isDown(B::X) && item.onX) {
+        auto run = item.onX; // (it may open the list again)
+        run();
+        return;
+    }
+    if (in.isDown(B::Y) && item.onY) {
+        auto run = item.onY;
+        run();
         return;
     }
     if (in.isDown(B::A)) {
@@ -11995,6 +12016,7 @@ void CardsActivity::openSongMenu(const std::string& path, int at) {
     items.push_back(action("Back", [this, at]() { openMusicManager(at); }));
     const std::string name = std::filesystem::path(path).filename().string();
     openMenu(name, std::move(items));
+    m_menuBack = [this, at]() { openMusicManager(at); };
 }
 
 // The song's file renamed (its kind kept); its place in the order, on / off
@@ -12359,6 +12381,7 @@ void CardsActivity::openPlaylist(const std::string& name) {
     }));
     items.push_back(action("Back", [this]() { openPlaylists(); }));
     openMenu(trf("{name} · {n} songs", {name, std::to_string(m_settings.playlists[name].size())}), std::move(items));
+    m_menuBack = [this]() { openPlaylists(); };
 }
 
 // Every song: in the playlist or not; one chosen goes in (at the end) or out.
@@ -12387,6 +12410,7 @@ void CardsActivity::openPlaylistAdd(const std::string& name, int chosen) {
                                           []() { return std::string(); }));
     items.push_back(action("Done", [this, name]() { openPlaylist(name); }));
     openMenu(trf("Songs in {name}", {name}), std::move(items));
+    m_menuBack = [this, name]() { openPlaylist(name); };
     m_menuSel = std::clamp(chosen, 0, static_cast<int>(m_menu.size()) - 1);
 }
 
@@ -12489,27 +12513,51 @@ void CardsActivity::checkGameMusicJob() {
             why = m_gmWhy;
         }
         if (song.empty()) { say(trf("It can't be played: {why}", {why})); m_gmHearing = -1; return; }
-        const bool had = m_audio.previewing();
         m_audio.setMusic(true, m_settings.musicVolume);
         m_audio.preview(std::move(song));
         if (!m_audio.previewing()) { say("It can't be played."); m_gmHearing = -1; }
-        else if (!m_menu.empty() && m_menuTitle == m_gmPickerTitle) // (the picker open: its "Stop listening" row, the song marked)
-            openSongPicker(m_menuSel + (had ? 0 : 1));
     } else if (job == 3) {
         checkGameMusic();
     }
 }
 
-// The game's songs: choose (A on one: hear it, leave it out, rename it), then copy.
+// The game's songs: X hears one (X again: stops), Y chooses it or leaves it
+// out, A has the rest (rename); then copy the chosen ones. B in a song's own
+// list comes back here, where it was.
+constexpr int kSongRows = 4; // the rows above the songs: the keys, copy, all, none
+
+void CardsActivity::listenToSong(int k) {
+    if (!m_gmFiles || k < 0 || k >= static_cast<int>(m_gmFiles->songs.size())) return;
+    if (m_gmHearing == k && m_audio.previewing()) { // (X again: stop)
+        m_audio.stopPreview();
+        m_gmHearing = -1;
+        return;
+    }
+    if (m_gmJob) { say("Wait a moment..."); return; }
+    m_gmHearing = k;
+    gamemusic::GameFiles* files = m_gmFiles.get();
+    const gamemusic::Song song = files->songs[(size_t)k];
+    gameMusicJob(2, [this, files, song]() {
+        std::vector<std::uint8_t> data;
+        std::string why;
+        if (!files->read(song, data, why)) data.clear();
+        else if (!gamemusic::isStream(data)) { data.clear(); why = "not a song it can play"; }
+        std::lock_guard<std::mutex> lk(m_gmMu);
+        m_gmHeard = std::move(data);
+        m_gmWhy = why;
+    });
+}
+
 void CardsActivity::openSongPicker(int chosen) {
     if (!m_gmFiles) return;
     auto& songs = m_gmFiles->songs;
     std::vector<MenuItem> items;
+    items.push_back(info("X: listen (X again: stop)   Y: choose / leave out   A: rename", []() { return std::string(); }));
     items.push_back(action("Copy the chosen songs", [this]() {
         if (!m_gmFiles || m_gmJob) return;
         int n = 0;
         for (const auto& s : m_gmFiles->songs) n += s.chosen;
-        if (!n) { say("Choose a song first."); openSongPicker(); return; }
+        if (!n) { say("Choose a song first."); openSongPicker(1); return; }
         m_audio.stopPreview();
         m_gmHearing = -1;
         m_gm = std::make_unique<gamemusic::Progress>();
@@ -12530,28 +12578,27 @@ void CardsActivity::openSongPicker(int chosen) {
     };
     items.push_back(action("Choose all", [this]() {
         for (auto& s : m_gmFiles->songs) s.chosen = true;
-        openSongPicker(1);
     }));
+    items.back().stay = true;
     items.push_back(action("Choose none", [this]() {
         for (auto& s : m_gmFiles->songs) s.chosen = false;
-        openSongPicker(2);
     }));
-    if (m_audio.previewing()) {
-        items.push_back(action("Stop listening", [this]() {
-            m_audio.stopPreview();
-            m_gmHearing = -1;
-            openSongPicker(3);
-        }));
-        items.back().glyph = "pause";
-    }
-    const int first = static_cast<int>(items.size());
+    items.back().stay = true;
     for (size_t i = 0; i < songs.size(); ++i) {
         const int k = static_cast<int>(i);
         items.push_back(action(songs[i].name, [this, k]() { openSongOptions(k); }));
-        items.back().glyph = k == m_gmHearing && m_audio.previewing() ? "play" : "music";
+        items.back().glyph = "music";
         items.back().value = [this, k]() -> std::string {
             if (!m_gmFiles || k >= static_cast<int>(m_gmFiles->songs.size())) return {};
-            return tr(m_gmFiles->songs[(size_t)k].chosen ? "On" : "Off");
+            const bool hearing = k == m_gmHearing && (m_audio.previewing() || m_gmJob == 2);
+            return (hearing ? tr("Playing") + "  " : std::string()) + tr(m_gmFiles->songs[(size_t)k].chosen ? "On" : "Off");
+        };
+        items.back().onX = [this, k]() { listenToSong(k); };
+        items.back().onY = [this, k]() {
+            if (!m_gmFiles || m_gmJob == 3) return;
+            auto& song = m_gmFiles->songs[(size_t)k];
+            song.chosen = !song.chosen;
+            m_audio.play(song.chosen ? "toggle_on" : "toggle_off");
         };
     }
     items.push_back(action("Done", [this]() {
@@ -12561,32 +12608,20 @@ void CardsActivity::openSongPicker(int chosen) {
     }));
     m_gmPickerTitle = trf("{game} · {n} songs", {m_gmGame, std::to_string(songs.size())});
     openMenu(m_gmPickerTitle, std::move(items));
-    (void)first;
-    m_menuSel = std::clamp(chosen, 0, static_cast<int>(m_menu.size()) - 1);
+    m_menuSel = std::clamp(chosen, 1, static_cast<int>(m_menu.size()) - 1);
 }
 
 void CardsActivity::openSongOptions(int k) {
     if (!m_gmFiles || k < 0 || k >= static_cast<int>(m_gmFiles->songs.size())) return;
-    const int row = k + (m_audio.previewing() ? 4 : 3); // (its row in the picker)
+    const int row = k + kSongRows;
     const gamemusic::Song& s = m_gmFiles->songs[(size_t)k];
     std::vector<MenuItem> items;
-    items.push_back(action("Listen", [this, k, row]() {
-        if (m_gmJob) { say("Wait a moment..."); return; }
-        m_gmHearing = k;
-        gamemusic::GameFiles* files = m_gmFiles.get();
-        const gamemusic::Song song = files->songs[(size_t)k];
-        gameMusicJob(2, [this, files, song]() {
-            std::vector<std::uint8_t> data;
-            std::string why;
-            if (!files->read(song, data, why)) data.clear();
-            else if (!gamemusic::isStream(data)) { data.clear(); why = "not a song it can play"; }
-            std::lock_guard<std::mutex> lk(m_gmMu);
-            m_gmHeard = std::move(data);
-            m_gmWhy = why;
-        });
+    const bool hearing = m_gmHearing == k && m_audio.previewing();
+    items.push_back(action(hearing ? "Stop listening" : "Listen", [this, k, row]() {
+        listenToSong(k);
         openSongPicker(row);
     }));
-    items.back().glyph = "play";
+    items.back().glyph = hearing ? "pause" : "play";
     items.push_back(action(s.chosen ? "Leave it out" : "Choose it", [this, k, row]() {
         auto& song = m_gmFiles->songs[(size_t)k];
         song.chosen = !song.chosen;
@@ -12608,6 +12643,7 @@ void CardsActivity::openSongOptions(int k) {
     items.back().glyph = "tag";
     items.push_back(action("Back", [this, row]() { openSongPicker(row); }));
     openMenu(s.name + " · " + std::to_string(std::max<std::uint64_t>(1, s.size >> 20)) + " MB", std::move(items));
+    m_menuBack = [this, row]() { openSongPicker(row); };
 }
 
 // Done: its songs found by the music player, a playlist of them, and a word.

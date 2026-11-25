@@ -180,6 +180,7 @@ private:
         bool danger = false;                    // red (Delete)
         bool stay = false;                      // an action that keeps the popup open
         const char* glyph = nullptr;            // its icon (Plus's options)
+        std::function<void()> onX, onY;         // X / Y on the row (a popup's list: the list stays open)
         float anim = -1.f;                      // a toggle's knob, easing
     };
     struct Section {
@@ -305,6 +306,7 @@ private:
     void checkGameMusicJob();
     void openSongPicker(int chosen = 0);
     void openSongOptions(int song);
+    void listenToSong(int song);
     void checkGameMusic();
     void renameSong(const std::string& path, int at);
     nxui::Color gridCursor(float a) const; // the grid's cursor: the highlight colour (White: SwitchU's blue)
@@ -707,7 +709,8 @@ private:
     void quickActivate(int row, int col);   // A on a button
     void quickChange(int row, int delta);   // left / right on a slider
     // Up / down, left / right, A and B on a list of rows; close() shuts it.
-    void listInput(std::vector<MenuItem>& items, int& sel, const std::function<void()>& close);
+    void listInput(std::vector<MenuItem>& items, int& sel, const std::function<void()>& close,
+                   const std::function<void()>& back = {});
     void openUsers();
     void openNotifications();
     void takeSwitchUOrder();
@@ -974,6 +977,7 @@ private:
 
     // Popups: a list (menu, power, music, users, a game's options), or the notifications.
     std::string m_menuTitle;
+    std::function<void()> m_menuBack; // B: back to the list before (set after openMenu), else closed
     std::vector<MenuItem> m_menu;
     int m_menuSel = 0;
     bool m_notifOpen = false;
