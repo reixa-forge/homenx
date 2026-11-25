@@ -12524,7 +12524,7 @@ void CardsActivity::checkGameMusicJob() {
 // The game's songs: X hears one (X again: stops), Y chooses it or leaves it
 // out, A has the rest (rename); then copy the chosen ones. B in a song's own
 // list comes back here, where it was.
-constexpr int kSongRows = 4; // the rows above the songs: the keys, copy, all, none
+constexpr int kSongRows = 3; // the rows above the songs: copy, all, none
 
 void CardsActivity::listenToSong(int k) {
     if (!m_gmFiles || k < 0 || k >= static_cast<int>(m_gmFiles->songs.size())) return;
@@ -12552,12 +12552,11 @@ void CardsActivity::openSongPicker(int chosen) {
     if (!m_gmFiles) return;
     auto& songs = m_gmFiles->songs;
     std::vector<MenuItem> items;
-    items.push_back(info("X: listen (X again: stop)   Y: choose / leave out   A: rename", []() { return std::string(); }));
     items.push_back(action("Copy the chosen songs", [this]() {
         if (!m_gmFiles || m_gmJob) return;
         int n = 0;
         for (const auto& s : m_gmFiles->songs) n += s.chosen;
-        if (!n) { say("Choose a song first."); openSongPicker(1); return; }
+        if (!n) { say("Choose a song first."); openSongPicker(0); return; }
         m_audio.stopPreview();
         m_gmHearing = -1;
         m_gm = std::make_unique<gamemusic::Progress>();
@@ -12593,7 +12592,14 @@ void CardsActivity::openSongPicker(int chosen) {
             const bool hearing = k == m_gmHearing && (m_audio.previewing() || m_gmJob == 2);
             return (hearing ? tr("Playing") + "  " : std::string()) + tr(m_gmFiles->songs[(size_t)k].chosen ? "On" : "Off");
         };
+        items.back().aHint = "More";
         items.back().onX = [this, k]() { listenToSong(k); };
+        items.back().xHint = [this, k]() -> const char* {
+            return k == m_gmHearing && (m_audio.previewing() || m_gmJob == 2) ? "Stop" : "Listen";
+        };
+        items.back().yHint = [this, k]() -> const char* {
+            return m_gmFiles && k < static_cast<int>(m_gmFiles->songs.size()) && m_gmFiles->songs[(size_t)k].chosen ? "Leave out" : "Choose";
+        };
         items.back().onY = [this, k]() {
             if (!m_gmFiles || m_gmJob == 3) return;
             auto& song = m_gmFiles->songs[(size_t)k];
@@ -12608,7 +12614,7 @@ void CardsActivity::openSongPicker(int chosen) {
     }));
     m_gmPickerTitle = trf("{game} · {n} songs", {m_gmGame, std::to_string(songs.size())});
     openMenu(m_gmPickerTitle, std::move(items));
-    m_menuSel = std::clamp(chosen, 1, static_cast<int>(m_menu.size()) - 1);
+    m_menuSel = std::clamp(chosen, 0, static_cast<int>(m_menu.size()) - 1);
 }
 
 void CardsActivity::openSongOptions(int k) {
@@ -14312,11 +14318,23 @@ void CardsActivity::drawPopup(nxui::Renderer& r) {
             r.drawRect({row.x + 16.f, row.y + row.height + 2.5f, row.width - 32.f, 1.f}, nxui::Color(1.f, 1.f, 1.f, 0.08f * a));
         drawRow(r, m_menu[i], row, at == m_menuSel, a, false);
     }
-    drawHints(r, box.x + box.width - 24.f, box.y + box.height - 26.f, {{"A", "Choose"}, {"B", "Back"}}, a);
+    // The keys, the chosen row's own too (X / Y) where it has them.
+    std::vector<std::pair<const char*, const char*>> keys;
+    const MenuItem* on = m_menuSel >= 0 && m_menuSel < static_cast<int>(n) ? &m_menu[(size_t)m_menuSel] : nullptr;
+    if (!on || on->kind != MenuItem::Info) keys.push_back({"A", on && on->aHint ? on->aHint : "Choose"});
+    if (on && on->onX) keys.push_back({"X", on->xHint ? on->xHint() : "X"});
+    if (on && on->onY) keys.push_back({"Y", on->yHint ? on->yHint() : "Y"});
+    keys.push_back({"B", "Back"});
+    drawHints(r, box.x + box.width - 24.f, box.y + box.height - 26.f, keys, a);
 }
 
 void CardsActivity::drawHints(nxui::Renderer& r, float right, float cy,
                               std::initializer_list<std::pair<const char*, const char*>> hints, float a) {
+    drawHints(r, right, cy, std::vector<std::pair<const char*, const char*>>(hints), a);
+}
+
+void CardsActivity::drawHints(nxui::Renderer& r, float right, float cy,
+                              const std::vector<std::pair<const char*, const char*>>& hints, float a) {
     float x = right;
     for (auto it = std::rbegin(hints); it != std::rend(hints); ++it) {
         x -= measured(m_fBody, it->second).x * 0.9f;

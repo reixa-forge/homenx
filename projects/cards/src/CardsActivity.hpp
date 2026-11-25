@@ -181,6 +181,8 @@ private:
         bool stay = false;                      // an action that keeps the popup open
         const char* glyph = nullptr;            // its icon (Plus's options)
         std::function<void()> onX, onY;         // X / Y on the row (a popup's list: the list stays open)
+        std::function<const char*()> xHint, yHint; // their names in the bar at the bottom ("Listen", "Stop")
+        const char* aHint = nullptr;            // A's name there, if not "Choose"
         float anim = -1.f;                      // a toggle's knob, easing
     };
     struct Section {
@@ -743,6 +745,7 @@ private:
     // A menu's foot: each button in a glass pill, then what it does (right-aligned).
     void drawHints(nxui::Renderer& r, float right, float cy,
                    std::initializer_list<std::pair<const char*, const char*>> hints, float a);
+    void drawHints(nxui::Renderer& r, float right, float cy, const std::vector<std::pair<const char*, const char*>>& hints, float a);
     void glassCircle(nxui::Renderer& r, float cx, float cy, float d, bool focused, const char* icon, float iconSize,
                      float a, float pressed);
     void frost(nxui::Renderer& r, const nxui::Rect& rect, float radius, const nxui::Color& tint);

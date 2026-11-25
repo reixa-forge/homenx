@@ -20,6 +20,7 @@
 #include <map>
 #include <memory>
 #include <cstdint>
+#include <cstddef>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -74,6 +75,30 @@ struct RomfsFile {
 };
 using ReadAt = std::function<bool(std::uint64_t offset, void* buffer, std::size_t size)>;
 bool listRomfs(const ReadAt& read, std::vector<RomfsFile>& out, std::string& why);
+
+// A compressed section (newer games): the table of pieces (bucket tree,
+// 0x18-byte entries: virtual offset, physical offset, kind 0 stored / 1 zeros
+// / 3 LZ4, physical size), read through `phys` (the section, decrypted).
+struct CompressedPiece {
+    std::uint64_t virt = 0, phys = 0;
+    std::uint32_t physSize = 0;
+    std::uint8_t kind = 0;
+};
+bool parseCompressionTable(const std::vector<std::uint8_t>& table, std::uint32_t entries,
+                           std::vector<CompressedPiece>& out, std::string& why);
+class CompressedStorage {
+public:
+    CompressedStorage(std::vector<CompressedPiece> pieces, std::uint64_t end, ReadAt phys);
+    bool read(std::uint64_t offset, void* buffer, std::size_t size);
+private:
+    std::vector<CompressedPiece> m_pieces;
+    std::uint64_t m_end;
+    ReadAt m_phys;
+    std::size_t m_cached = SIZE_MAX;            // the piece last unpacked
+    std::vector<std::uint8_t> m_cache, m_packed;
+};
+// LZ4 block (no frame): false if it doesn't come out exactly dstSize.
+bool lz4Block(const std::uint8_t* src, std::size_t srcSize, std::uint8_t* dst, std::size_t dstSize);
 
 // --- the decoders, on their own (tests) ---
 

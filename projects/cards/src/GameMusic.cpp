@@ -490,6 +490,107 @@ bool listRomfs(const ReadAt& read, std::vector<RomfsFile>& out, std::string& why
     return true;
 }
 
+// ---------------------------------------------------------------- compressed sections
+
+bool lz4Block(const std::uint8_t* src, size_t srcSize, std::uint8_t* dst, size_t dstSize) {
+    size_t i = 0, o = 0;
+    while (i < srcSize) {
+        const std::uint8_t token = src[i++];
+        size_t lit = token >> 4;
+        if (lit == 15)
+            for (std::uint8_t b = 255; b == 255 && i < srcSize;) { b = src[i++]; lit += b; }
+        if (lit > srcSize - i || lit > dstSize - o) return false;
+        std::memcpy(dst + o, src + i, lit);
+        i += lit;
+        o += lit;
+        if (i >= srcSize) break; // (the last sequence: literals only)
+        if (srcSize - i < 2) return false;
+        const size_t back = size_t(src[i]) | size_t(src[i + 1]) << 8;
+        i += 2;
+        if (!back || back > o) return false;
+        size_t len = (token & 0xF) + 4;
+        if ((token & 0xF) == 15)
+            for (std::uint8_t b = 255; b == 255 && i < srcSize;) { b = src[i++]; len += b; }
+        if (len > dstSize - o) return false;
+        for (size_t k = 0; k < len; ++k, ++o) dst[o] = dst[o - back]; // (may overlap: byte by byte)
+    }
+    return o == dstSize;
+}
+
+// The bucket tree: a 0x4000 node (header: index, count, end; then each set's
+// start), then the entry sets, 0x4000 each (header: index, count, end; then
+// the entries). With more sets than one node holds, a second level of nodes
+// comes first: they're skipped (the sets are where they always are, last).
+bool parseCompressionTable(const std::vector<std::uint8_t>& t, std::uint32_t entries, std::vector<CompressedPiece>& out,
+                           std::string& why) {
+    constexpr size_t kNode = 0x4000, kEntry = 0x18;
+    constexpr size_t perSet = (kNode - 0x10) / kEntry, perNode = (kNode - 0x10) / 8;
+    const size_t sets = (entries + perSet - 1) / perSet;
+    const size_t l2 = sets > perNode ? (sets - perNode + perNode - 1) / perNode : 0;
+    const size_t first = (1 + l2) * kNode;
+    if (t.size() < first + sets * kNode) { why = "its compression table is short"; return false; }
+    out.clear();
+    out.reserve(entries);
+    for (size_t s = 0; s < sets; ++s) {
+        const std::uint8_t* set = t.data() + first + s * kNode;
+        const std::uint32_t count = le32(set + 4);
+        if (count > perSet) { why = "its compression table looks wrong"; return false; }
+        for (std::uint32_t e = 0; e < count; ++e) {
+            const std::uint8_t* p = set + 0x10 + e * kEntry;
+            CompressedPiece c;
+            c.virt = le64(p);
+            c.phys = le64(p + 8);
+            c.kind = p[0x10];
+            c.physSize = le32(p + 0x14);
+            out.push_back(c);
+        }
+    }
+    for (size_t i = 1; i < out.size(); ++i)
+        if (out[i].virt < out[i - 1].virt) { why = "its compression table is out of order"; return false; }
+    return !out.empty();
+}
+
+CompressedStorage::CompressedStorage(std::vector<CompressedPiece> pieces, std::uint64_t end, ReadAt phys)
+    : m_pieces(std::move(pieces)), m_end(end), m_phys(std::move(phys)) {}
+
+bool CompressedStorage::read(std::uint64_t off, void* buffer, size_t n) {
+    auto* out = static_cast<std::uint8_t*>(buffer);
+    while (n) {
+        // The piece holding `off`: the last one starting at or before it.
+        auto it = std::upper_bound(m_pieces.begin(), m_pieces.end(), off,
+                                   [](std::uint64_t v, const CompressedPiece& c) { return v < c.virt; });
+        if (it == m_pieces.begin()) return false;
+        --it;
+        const size_t index = static_cast<size_t>(it - m_pieces.begin());
+        const std::uint64_t pieceEnd = index + 1 < m_pieces.size() ? m_pieces[index + 1].virt : m_end;
+        if (off >= pieceEnd) return false;
+        const std::uint64_t within = off - it->virt;
+        const size_t k = static_cast<size_t>(std::min<std::uint64_t>(n, pieceEnd - off));
+        if (it->kind == 0) {
+            if (!m_phys(it->phys + within, out, k)) return false;
+        } else if (it->kind == 1) {
+            std::memset(out, 0, k);
+        } else if (it->kind == 3) {
+            if (m_cached != index) {
+                const std::uint64_t size = pieceEnd - it->virt;
+                if (size > (64u << 20) || it->physSize > (64u << 20)) return false;
+                m_packed.resize(it->physSize);
+                m_cache.resize(static_cast<size_t>(size));
+                if (!m_phys(it->phys, m_packed.data(), m_packed.size())) return false;
+                if (!lz4Block(m_packed.data(), m_packed.size(), m_cache.data(), m_cache.size())) return false;
+                m_cached = index;
+            }
+            std::memcpy(out, m_cache.data() + within, k);
+        } else {
+            return false;
+        }
+        out += k;
+        off += k;
+        n -= k;
+    }
+    return true;
+}
+
 #ifdef __SWITCH__
 
 namespace {
@@ -521,6 +622,11 @@ struct Keys {
     std::map<int, Key> titlekek;   // titlekek_XX
     std::map<std::string, Key> title; // rights ID (lower-case hex) -> title key
 };
+
+std::string lower(std::string s) {
+    for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+}
 
 int hexDigit(char c) {
     if (c >= '0' && c <= '9') return c - '0';
@@ -595,17 +701,24 @@ bool loadKeys(Keys& k, std::string& why) {
             if (n >= 0 && fromHex(value, key.data(), 16)) k.titlekek[n] = key;
         }
     });
-    for (const char* p : {"sdmc:/switch/title.keys", "sdmc:/title.keys"})
-        if (std::filesystem::exists(p)) {
-            readKeyFile(p, [&k](const std::string& name, const std::string& value) {
+    // Every title*.keys (title.keys, and e.g. title_emummc.keys beside it: a
+    // dump from each system), in /switch and the SD card's top.
+    int titleFiles = 0;
+    for (const char* dir : {"sdmc:/switch", "sdmc:/"}) {
+        std::error_code ec;
+        for (const auto& e : std::filesystem::directory_iterator(dir, ec)) {
+            const std::string name = lower(e.path().filename().string());
+            if (name.rfind("title", 0) != 0 || name.size() < 5 || name.compare(name.size() - 5, 5, ".keys") != 0) continue;
+            ++titleFiles;
+            readKeyFile(e.path().string().c_str(), [&k](const std::string& n, const std::string& value) {
                 Key key;
-                if (name.size() == 32 && fromHex(value, key.data(), 16)) k.title[name] = key;
+                if (n.size() == 32 && fromHex(value, key.data(), 16)) k.title[n] = key;
             });
-            break;
         }
+    }
     logLine(std::string("keys: ") + prod + (k.hasHeader ? "" : " (no header_key)") + ", " +
             std::to_string(k.areaKey[0].size()) + " key area keys, " + std::to_string(k.titlekek.size()) + " titlekeks, " +
-            std::to_string(k.title.size()) + " title keys");
+            std::to_string(k.title.size()) + " title keys (" + std::to_string(titleFiles) + " files)");
     if (!k.hasHeader) {
         why = "prod.keys has no header_key";
         return false;
@@ -640,9 +753,17 @@ struct Nca {
         return true;
     }
 
-    // From the RomFS's start, decrypted.
+    std::unique_ptr<CompressedStorage> compressed; // (newer games: the section's pieces packed)
+
+    // From the RomFS's start: decrypted, and unpacked where it's compressed.
     bool read(std::uint64_t off, void* buf, size_t n) {
-        std::uint64_t at = sectionStart + romfsStart + off;
+        if (compressed) return compressed->read(romfsStart + off, buf, n);
+        return readSection(romfsStart + off, buf, n);
+    }
+
+    // From the section's start, decrypted.
+    bool readSection(std::uint64_t off, void* buf, size_t n) {
+        std::uint64_t at = sectionStart + off;
         if (encryption == 1) return readRaw(at, buf, n);
         auto* out = static_cast<std::uint8_t*>(buf);
         while (n) {
@@ -667,6 +788,36 @@ struct Nca {
         return true;
     }
 };
+
+// The console's common ticket for a rights ID (es: GetCommonTicketData), its
+// title key still sealed. Personalized tickets (bought on this console) hold
+// it RSA-encrypted: not read here (title.keys has those).
+bool commonTicketKey(const std::uint8_t* rightsId, Key& sealed) {
+    Service es;
+    if (R_FAILED(smGetService(&es, "es"))) return false;
+    struct { std::uint8_t id[16]; } in;
+    std::memcpy(in.id, rightsId, 16);
+    std::vector<std::uint8_t> ticket(0x800);
+    std::uint64_t size = 0;
+    const Result rc = serviceDispatchInOut(&es, 16, in, size,
+        .buffer_attrs = {SfBufferAttr_HipcMapAlias | SfBufferAttr_Out},
+        .buffers = {{ticket.data(), ticket.size()}});
+    serviceClose(&es);
+    if (R_FAILED(rc)) {
+        logLine("no common ticket on the console (rc=0x" + hex(rc) + ")");
+        return false;
+    }
+    size_t body;
+    switch (le32(ticket.data())) {
+        case 0x10000: case 0x10001: body = 0x240; break;   // RSA-4096
+        case 0x10003: case 0x10004: body = 0x140; break;   // RSA-2048
+        case 0x10002: case 0x10005: body = 0x80; break;    // ECDSA
+        default: return false;
+    }
+    if (body + 0x180 > ticket.size() || ticket[body + 0x141] != 0) return false; // (0: common)
+    std::memcpy(sealed.data(), ticket.data() + body + 0x40, 16);
+    return true;
+}
 
 bool looksLikeRomfs(Nca& nca) {
     std::uint8_t h[0x50];
@@ -735,7 +886,14 @@ bool openGame(std::uint64_t appId, const Keys& keys, Nca& nca, std::string& why)
     const std::uint32_t layers = le32(fs + 8 + 0xC);
     if (layers < 2 || layers > 7) { why = "its files look wrong"; return false; }
     nca.romfsStart = le64(fs + 8 + 0x10 + (layers - 2) * 0x18);
+    const std::uint64_t romfsEnd = nca.romfsStart + le64(fs + 8 + 0x10 + (layers - 2) * 0x18 + 8);
     std::memcpy(nca.ctrHigh, fs + 0x140, 8);
+    // Newer games: the section packed in pieces (LZ4), a table says where.
+    const std::uint64_t packOff = le64(fs + 0x178), packSize = le64(fs + 0x180);
+    const bool packed = packSize != 0 && std::memcmp(fs + 0x188, "BKTR", 4) == 0;
+    const std::uint32_t packEntries = packed ? le32(fs + 0x188 + 8) : 0;
+    if (le64(fs + 0x148 + 8) != 0) logLine("section is sparse (not read yet)");
+    if (packed) logLine("section is compressed: " + std::to_string(packEntries) + " pieces");
     if (nca.encryption != 1 && nca.encryption != 3) {
         why = "its files are encrypted a way not read yet (" + std::to_string(nca.encryption) + ")";
         return false;
@@ -757,37 +915,57 @@ bool openGame(std::uint64_t appId, const Keys& keys, Nca& nca, std::string& why)
     } else {
         char rid[33];
         for (int i = 0; i < 16; ++i) std::snprintf(rid + 2 * i, 3, "%02x", h[0x230 + i]);
-        const auto t = keys.title.find(rid);
-        if (t == keys.title.end()) {
-            why = "its title key isn't in title.keys: run Lockpick_RCM again";
-            logLine(std::string("no title key for rights ID ") + rid);
-            return false;
-        }
-        tries.push_back(t->second); // (as it is: already decrypted)
         const auto kek = keys.titlekek.find(keyIndex);
-        if (kek != keys.titlekek.end()) { // (or still encrypted with the titlekek)
+        auto unwrap = [&](const Key& sealed) { // (a title key as tickets keep it: sealed with the titlekek)
+            if (kek == keys.titlekek.end()) return;
             Aes128Context ecb;
             aes128ContextCreate(&ecb, kek->second.data(), false);
             Key key;
-            aes128DecryptBlock(&ecb, key.data(), t->second.data());
+            aes128DecryptBlock(&ecb, key.data(), sealed.data());
             tries.push_back(key);
+        };
+        const auto t = keys.title.find(rid);
+        if (t != keys.title.end()) {
+            tries.push_back(t->second); // (title.keys: already unsealed)
+            unwrap(t->second);
+        }
+        // The console's own ticket for it (installed games: a common ticket).
+        Key sealed;
+        if (commonTicketKey(h.data() + 0x230, sealed)) {
+            logLine("title key from the console's ticket");
+            unwrap(sealed);
+        }
+        if (tries.empty()) {
+            why = "its title key isn't in title.keys (run Lockpick_RCM on the system the game is on: sysMMC or emuMMC)";
+            logLine(std::string("no title key for rights ID ") + rid);
+            return false;
         }
     }
+    std::string packWhy;
+    std::vector<std::uint8_t> table;
     for (const Key& k : tries) {
         nca.key = k;
+        nca.compressed.reset();
+        if (packed) {
+            std::vector<CompressedPiece> pieces;
+            table.resize(static_cast<size_t>(std::min<std::uint64_t>(packSize, 64u << 20)));
+            if (!nca.readSection(packOff, table.data(), table.size()) ||
+                !parseCompressionTable(table, packEntries, pieces, packWhy))
+                continue; // (the wrong key reads garbage)
+            Nca* self = &nca;
+            nca.compressed = std::make_unique<CompressedStorage>(
+                std::move(pieces), romfsEnd,
+                [self](std::uint64_t off, void* buf, size_t n) { return self->readSection(off, buf, n); });
+        }
         if (nca.encryption == 1 || looksLikeRomfs(nca)) {
             logLine("RomFS opened (section " + std::to_string(section) + ")");
             return true;
         }
     }
+    if (packed && !packWhy.empty()) logLine("compression: " + packWhy);
     why = "its files couldn't be decrypted (keys too old? run Lockpick_RCM again)";
     logLine("RomFS: no key gave a RomFS");
     return false;
-}
-
-std::string lower(std::string s) {
-    for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return s;
 }
 
 std::string safeName(std::string s) {
@@ -834,7 +1012,7 @@ std::unique_ptr<GameFiles> GameFiles::open(std::uint64_t appId, const std::strin
                 Song s;
                 s.name = safeName(std::filesystem::path(f.path).stem().string());
                 s.ext = ends(".bfstm") ? ".bfstm" : ".bwav";
-                s.path = std::move(f.path);
+                s.path = f.path;
                 s.offset = f.offset;
                 s.size = f.size;
                 g->songs.push_back(std::move(s));
@@ -847,7 +1025,33 @@ std::unique_ptr<GameFiles> GameFiles::open(std::uint64_t appId, const std::strin
                     }
             }
         }
+        // A game with hundreds: its sound effects among them. Under ~10 seconds
+        // (512 KB of DSP-ADPCM stereo) left out.
+        size_t shortOnes = 0;
+        if (g->songs.size() > 300) {
+            const size_t before = g->songs.size();
+            g->songs.erase(std::remove_if(g->songs.begin(), g->songs.end(), [](const Song& x) { return x.size < 512u * 1024u; }),
+                           g->songs.end());
+            shortOnes = before - g->songs.size();
+        }
         std::sort(g->songs.begin(), g->songs.end(), [](const Song& a, const Song& b) { return a.path < b.path; });
+        if (shortOnes) logLine("left out " + std::to_string(shortOnes) + " short sounds");
+        if (g->songs.empty()) { // (what it does have: the next formats to read)
+            std::map<std::string, std::pair<int, std::uint64_t>> kinds;
+            for (const RomfsFile& f : all) {
+                std::string ext = lower(std::filesystem::path(f.path).extension().string());
+                auto& k = kinds[ext.empty() ? "(none)" : ext];
+                ++k.first;
+                k.second += f.size;
+            }
+            std::vector<std::pair<std::string, std::pair<int, std::uint64_t>>> big(kinds.begin(), kinds.end());
+            std::sort(big.begin(), big.end(), [](const auto& a, const auto& b) { return a.second.second > b.second.second; });
+            std::string line;
+            for (size_t i = 0; i < big.size() && i < 8; ++i)
+                line += " " + big[i].first + " x" + std::to_string(big[i].second.first) + " (" +
+                        std::to_string(big[i].second.second >> 20) + " MB)";
+            logLine("its biggest kinds of file:" + line);
+        }
         // Same names in two folders: numbered.
         std::set<std::string> used;
         for (Song& s : g->songs) {
