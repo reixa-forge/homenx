@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <array>
+#include <chrono>
 #include <cctype>
 #include <map>
 #include <memory>
@@ -21,6 +22,11 @@
 #endif
 
 namespace gamemusic {
+
+namespace {
+std::uint32_t le32(const std::uint8_t* p) { return std::uint32_t(p[0]) | std::uint32_t(p[1]) << 8 | std::uint32_t(p[2]) << 16 | std::uint32_t(p[3]) << 24; }
+std::uint64_t le64(const std::uint8_t* p) { return std::uint64_t(le32(p)) | std::uint64_t(le32(p + 4)) << 32; }
+} // namespace
 
 namespace {
 
@@ -331,9 +337,77 @@ void decodeDspFrame(const std::uint8_t* f, const std::int16_t* coefs, std::int16
 
 // ---------------------------------------------------------------- as a WAV, on demand
 
+// IMA ADPCM (the .wav kind: blocks, each channel's header then its 4-bit
+// nibbles in 4-byte runs, low nibble first).
+const int kImaIndex[8] = {-1, -1, -1, -1, 2, 4, 6, 8};
+const int kImaStep[89] = {7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66,
+                          73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449,
+                          494, 544, 598, 658, 724, 796, 876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272,
+                          2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493,
+                          10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767};
+
+struct ImaState {
+    int predictor = 0, index = 0;
+    std::int16_t decode(int nibble) { // (as ffmpeg / SDL / Windows decode it)
+        const int step = kImaStep[index];
+        const int diff = ((2 * (nibble & 7) + 1) * step) >> 3;
+        predictor = std::clamp(nibble & 8 ? predictor - diff : predictor + diff, -32768, 32767);
+        index = std::clamp(index + kImaIndex[nibble & 7], 0, 88);
+        return static_cast<std::int16_t>(predictor);
+    }
+    int encode(int sample) { // (the nibble; the state moves as the decoder's will)
+        const int step = kImaStep[index];
+        int diff = sample - predictor, nibble = 0;
+        if (diff < 0) { nibble = 8; diff = -diff; }
+        nibble |= std::min(7, (diff * 4) / step); // (its step back is (2d+1)·step/8: the nearest)
+        decode(nibble);
+        return nibble;
+    }
+};
+
+// A RIFF .wav's IMA ADPCM format: where its data is, and its shape.
+struct ImaWav {
+    int channels = 0, rate = 0, blockAlign = 0, perBlock = 0;
+    size_t data = 0, dataSize = 0;
+    std::uint32_t samples = 0;
+};
+bool parseImaWav(const std::vector<std::uint8_t>& d, ImaWav& w) {
+    if (d.size() < 12 || std::memcmp(d.data(), "RIFF", 4) != 0 || std::memcmp(d.data() + 8, "WAVE", 4) != 0) return false;
+    bool fmt = false;
+    for (size_t at = 12; at + 8 <= d.size();) {
+        const std::uint32_t size = le32(&d[at + 4]);
+        const size_t body = at + 8;
+        if (std::memcmp(&d[at], "fmt ", 4) == 0 && size >= 20 && body + 20 <= d.size()) {
+            if ((d[body] | d[body + 1] << 8) != 0x11) return false;
+            w.channels = d[body + 2] | d[body + 3] << 8;
+            w.rate = static_cast<int>(le32(&d[body + 4]));
+            w.blockAlign = d[body + 12] | d[body + 13] << 8;
+            w.perBlock = d[body + 18] | d[body + 19] << 8;
+            fmt = true;
+        } else if (std::memcmp(&d[at], "fact", 4) == 0 && size >= 4 && body + 4 <= d.size()) {
+            w.samples = le32(&d[body]);
+        } else if (std::memcmp(&d[at], "data", 4) == 0) {
+            w.data = body;
+            w.dataSize = std::min<size_t>(size, d.size() - body);
+            break;
+        }
+        at = body + size + (size & 1);
+    }
+    if (!fmt || !w.data || w.channels < 1 || w.channels > 8 || w.rate < 1 || w.blockAlign <= 4 * w.channels) return false;
+    if (w.perBlock < 1) w.perBlock = (w.blockAlign - 4 * w.channels) * 2 / w.channels + 1;
+    const std::uint32_t blocks = static_cast<std::uint32_t>(w.dataSize / static_cast<size_t>(w.blockAlign));
+    const std::uint32_t most = blocks * static_cast<std::uint32_t>(w.perBlock);
+    if (!w.samples || w.samples > most) w.samples = most;
+    return w.samples > 0;
+}
+
 struct WavStream::Impl {
     std::vector<std::uint8_t> file;
     Parsed p;
+    std::unique_ptr<VgmSong> vgm;     // (or a vgmstream song)
+    ImaWav ima;                       // (or an IMA ADPCM .wav)
+    bool isIma = false;
+    int chans = 0, rate = 0;          // what comes out
     std::uint32_t first = 0, again = 0, fade = 0, total = 0;
     std::vector<std::uint8_t> head;
     // The decoded samples, a piece at a time: bytes [bufStart, bufStart + buf.size()) of the data.
@@ -344,6 +418,7 @@ struct WavStream::Impl {
     std::vector<std::int16_t> chan;
 
     void restart() {
+        if (vgm) vgm->restart();
         p.ch = fresh;
         frame = 0;
         buf.clear();
@@ -353,6 +428,53 @@ struct WavStream::Impl {
     // The next piece (up to 4096 frames) into buf.
     bool decodeNext() {
         if (frame >= total) return false;
+        if (vgm) {
+            bufStart += buf.size();
+            const int chans = vgm->channels();
+            const std::uint32_t n = std::min<std::uint32_t>(4096, total - frame);
+            buf.assign(size_t(n) * chans * 2, 0);
+            std::size_t got = 0;
+            while (got < n) {
+                const std::size_t k = vgm->fill(reinterpret_cast<std::int16_t*>(buf.data()) + got * chans, n - got);
+                if (!k) break; // (ended early: silence to the end)
+                got += k;
+            }
+            frame += n;
+            return true;
+        }
+        if (isIma) { // one block (all its channels)
+            bufStart += buf.size();
+            const int chans = ima.channels;
+            const std::uint32_t block = frame / static_cast<std::uint32_t>(ima.perBlock);
+            const std::uint32_t n = std::min<std::uint32_t>(static_cast<std::uint32_t>(ima.perBlock), total - frame);
+            buf.assign(size_t(n) * chans * 2, 0);
+            auto* out = reinterpret_cast<std::int16_t*>(buf.data());
+            const size_t at = ima.data + size_t(block) * static_cast<size_t>(ima.blockAlign);
+            if (at + static_cast<size_t>(ima.blockAlign) <= file.size()) {
+                const std::uint8_t* b = &file[at];
+                std::vector<ImaState> st(static_cast<size_t>(chans));
+                for (int c = 0; c < chans; ++c) {
+                    st[(size_t)c].predictor = static_cast<std::int16_t>(b[c * 4] | b[c * 4 + 1] << 8);
+                    st[(size_t)c].index = std::clamp<int>(b[c * 4 + 2], 0, 88);
+                    out[c] = static_cast<std::int16_t>(st[(size_t)c].predictor);
+                }
+                // Then runs of 4 bytes (8 samples) per channel in turn.
+                const std::uint8_t* nib = b + 4 * chans;
+                for (std::uint32_t i = 1; i < n;) {
+                    for (int c = 0; c < chans; ++c) {
+                        const std::uint8_t* run = nib + c * 4;
+                        for (int k = 0; k < 8 && i + static_cast<std::uint32_t>(k) < n; ++k) {
+                            const int v = k % 2 ? run[k / 2] >> 4 : run[k / 2] & 15;
+                            out[size_t(i + static_cast<std::uint32_t>(k)) * chans + c] = st[(size_t)c].decode(v);
+                        }
+                    }
+                    nib += 4 * chans;
+                    i += 8;
+                }
+            }
+            frame += n;
+            return true;
+        }
         const int chans = static_cast<int>(p.ch.size());
         bufStart += buf.size();
         if (frame == first && again) // (on into the loop again)
@@ -400,6 +522,13 @@ std::unique_ptr<WavStream> WavStream::open(std::vector<std::uint8_t> file, std::
         if (!parseBwav(i.file, i.p, why)) return nullptr;
     } else if (m == "FWAV") {
         if (!parseFwav(i.file, i.p, why)) return nullptr;
+    } else if (m == "RIFF" && parseImaWav(i.file, i.ima)) {
+        i.isIma = true;
+        i.total = i.ima.samples;
+        i.chans = i.ima.channels;
+        i.rate = i.ima.rate;
+        i.head = wavHeader(i.chans, i.rate, i.total);
+        return w;
     } else {
         why = "not a stream";
         return nullptr;
@@ -413,17 +542,32 @@ std::unique_ptr<WavStream> WavStream::open(std::vector<std::uint8_t> file, std::
         i.again = std::min(s.loopEnd - s.loopStart, maxFrames - i.first);
     i.fade = i.again ? std::min<std::uint32_t>(i.again, static_cast<std::uint32_t>(s.sampleRate) * 8u) : 0;
     i.total = i.first + i.again;
-    i.head = wavHeader(static_cast<int>(i.p.ch.size()), s.sampleRate, i.total);
+    i.chans = static_cast<int>(i.p.ch.size());
+    i.rate = s.sampleRate;
+    i.head = wavHeader(i.chans, i.rate, i.total);
     i.fresh = i.p.ch;
     return w;
 }
 
+std::unique_ptr<WavStream> WavStream::open(std::unique_ptr<VgmSong> song) {
+    if (!song) return nullptr;
+    std::unique_ptr<WavStream> w(new WavStream());
+    Impl& i = *w->m;
+    const std::uint64_t frames = std::min<std::uint64_t>(song->frames(), std::uint64_t(song->rate()) * 600u);
+    i.total = static_cast<std::uint32_t>(frames);
+    i.chans = song->channels();
+    i.rate = song->rate();
+    i.head = wavHeader(i.chans, i.rate, i.total);
+    i.vgm = std::move(song);
+    return w;
+}
+
 std::uint64_t WavStream::size() const {
-    return m->head.size() + std::uint64_t(m->total) * m->p.ch.size() * 2;
+    return m->head.size() + std::uint64_t(m->total) * static_cast<std::uint64_t>(m->chans) * 2;
 }
 
 double WavStream::seconds() const {
-    return m->p.info.sampleRate ? static_cast<double>(m->total) / m->p.info.sampleRate : 0.0;
+    return m->rate ? static_cast<double>(m->total) / m->rate : 0.0;
 }
 
 size_t WavStream::read(std::uint64_t off, void* buffer, size_t n) {
@@ -453,7 +597,80 @@ size_t WavStream::read(std::uint64_t off, void* buffer, size_t n) {
 
 bool isStream(const std::vector<std::uint8_t>& file) {
     const std::string m = magic(file);
+    if (m == "RIFF") { // (HOME's own: an IMA ADPCM .wav)
+        ImaWav w;
+        return parseImaWav(file, w);
+    }
     return m == "FSTM" || m == "BWAV" || m == "FWAV";
+}
+
+std::vector<std::uint8_t> imaWav(const std::vector<std::int16_t>& pcm, int channels, int rate) {
+    size_t at = 0;
+    return imaWavFrom([&](std::int16_t* out, size_t frames) {
+        const size_t n = std::min(frames, (pcm.size() - at) / static_cast<size_t>(channels));
+        std::memcpy(out, pcm.data() + at, n * static_cast<size_t>(channels) * 2);
+        at += n * static_cast<size_t>(channels);
+        return n;
+    }, pcm.size() / static_cast<size_t>(channels), channels, rate);
+}
+
+std::vector<std::uint8_t> imaWavFrom(const std::function<size_t(std::int16_t*, size_t)>& pull, std::uint64_t total, int channels, int rate) {
+    const int blockAlign = 512 * channels;
+    const int perBlock = (blockAlign - 4 * channels) * 2 / channels + 1; // (1017)
+    const size_t frames = static_cast<size_t>(total);
+    const size_t blocks = (frames + static_cast<size_t>(perBlock) - 1) / static_cast<size_t>(perBlock);
+    std::vector<std::uint8_t> out;
+    out.reserve(60 + blocks * static_cast<size_t>(blockAlign));
+    const std::uint32_t dataSize = static_cast<std::uint32_t>(blocks * static_cast<size_t>(blockAlign));
+    out.insert(out.end(), {'R', 'I', 'F', 'F'});
+    put32(out, 4 + 28 + 12 + 8 + dataSize);
+    out.insert(out.end(), {'W', 'A', 'V', 'E', 'f', 'm', 't', ' '});
+    put32(out, 20);
+    put16(out, 0x11);
+    put16(out, static_cast<std::uint16_t>(channels));
+    put32(out, static_cast<std::uint32_t>(rate));
+    put32(out, static_cast<std::uint32_t>(static_cast<std::uint64_t>(rate) * blockAlign / perBlock));
+    put16(out, static_cast<std::uint16_t>(blockAlign));
+    put16(out, 4);
+    put16(out, 2);
+    put16(out, static_cast<std::uint16_t>(perBlock));
+    out.insert(out.end(), {'f', 'a', 'c', 't'});
+    put32(out, 4);
+    put32(out, static_cast<std::uint32_t>(frames));
+    out.insert(out.end(), {'d', 'a', 't', 'a'});
+    put32(out, dataSize);
+    std::vector<ImaState> st(static_cast<size_t>(channels));
+    // A block's samples at a time (pulled; silence past the end).
+    std::vector<std::int16_t> pcm(static_cast<size_t>(perBlock) * static_cast<size_t>(channels));
+    size_t base = 0;
+    auto sample = [&](size_t f, int c) -> int {
+        return f < frames ? pcm[(f - base) * static_cast<size_t>(channels) + static_cast<size_t>(c)] : 0;
+    };
+    for (size_t b = 0; b < blocks; ++b) {
+        const size_t f0 = b * static_cast<size_t>(perBlock);
+        base = f0;
+        std::fill(pcm.begin(), pcm.end(), 0);
+        for (size_t got = 0, want = std::min<size_t>(static_cast<size_t>(perBlock), frames - f0); got < want;) {
+            const size_t k = pull(pcm.data() + got * static_cast<size_t>(channels), want - got);
+            if (!k) break;
+            got += k;
+        }
+        for (int c = 0; c < channels; ++c) { // each channel's header: its first sample, as is
+            ImaState& s = st[(size_t)c];
+            s.predictor = sample(f0, c);
+            put16(out, static_cast<std::uint16_t>(static_cast<std::int16_t>(s.predictor)));
+            out.push_back(static_cast<std::uint8_t>(s.index));
+            out.push_back(0);
+        }
+        for (int i = 1; i < perBlock; i += 8)
+            for (int c = 0; c < channels; ++c)
+                for (int k = 0; k < 8; k += 2) {
+                    const int lo = st[(size_t)c].encode(sample(f0 + static_cast<size_t>(i + k), c));
+                    const int hi = st[(size_t)c].encode(sample(f0 + static_cast<size_t>(i + k + 1), c));
+                    out.push_back(static_cast<std::uint8_t>(lo | hi << 4));
+                }
+    }
+    return out;
 }
 
 // .bars: a count, its names' hashes, then each sound's (AMTA, asset) offsets.
@@ -514,10 +731,6 @@ bool convert(const std::vector<std::uint8_t>& file, const std::string& outPath, 
 
 // ---------------------------------------------------------------- RomFS
 
-namespace {
-std::uint32_t le32(const std::uint8_t* p) { return std::uint32_t(p[0]) | std::uint32_t(p[1]) << 8 | std::uint32_t(p[2]) << 16 | std::uint32_t(p[3]) << 24; }
-std::uint64_t le64(const std::uint8_t* p) { return std::uint64_t(le32(p)) | std::uint64_t(le32(p + 4)) << 32; }
-} // namespace
 
 // Header: ten u64s (its size 0x50, then directory hash / directory entries /
 // file hash / file entries as offset+size pairs, then where the files' data
@@ -1088,10 +1301,12 @@ std::string safeName(std::string s) {
 } // namespace
 
 struct GameFiles::Impl {
-    std::unique_ptr<Nca> nca;
-    std::mutex mu; // (one read at a time: a song heard while others copy)
+    std::shared_ptr<Nca> nca;
+    std::shared_ptr<FileSet> set; // (its files by path, for vgmstream: holds the Nca too, and the lock)
     std::vector<std::unique_ptr<zstd::Dictionary>> dicts; // (the game's own, for its .zs files)
 };
+
+std::shared_ptr<FileSet> GameFiles::fileSet() const { return m->set; }
 
 GameFiles::GameFiles() : m(std::make_unique<Impl>()) {}
 GameFiles::~GameFiles() = default;
@@ -1102,8 +1317,13 @@ std::unique_ptr<GameFiles> GameFiles::open(std::uint64_t appId, const std::strin
         auto keys = std::make_unique<Keys>();
         if (!loadKeys(*keys, why)) { logLine("stopped: " + why); return nullptr; }
         std::unique_ptr<GameFiles> g(new GameFiles());
-        g->m->nca = std::make_unique<Nca>();
+        g->m->nca = std::make_shared<Nca>();
         if (!openGame(appId, *keys, *g->m->nca, why)) { logLine("stopped: " + why); return nullptr; }
+        g->m->set = std::make_shared<FileSet>();
+        {
+            std::shared_ptr<Nca> keep = g->m->nca;
+            g->m->set->read = [keep](std::uint64_t off, void* buf, size_t n) { return keep->read(off, buf, n); };
+        }
         keys.reset();
         std::vector<RomfsFile> all;
         Nca* nca = g->m->nca.get();
@@ -1136,12 +1356,63 @@ std::unique_ptr<GameFiles> GameFiles::open(std::uint64_t appId, const std::strin
                 s.zs = zs;
                 g->songs.push_back(std::move(s));
             } else {
-                for (const char* e : {".wem", ".bnk", ".bank", ".acb", ".awb", ".hca",
+                for (const char* e : {".wem", ".bnk", ".bank",
                                       ".opus", ".lopus", ".pak", ".cpk", ".utoc", ".ucas"})
                     if (ends(e)) {
                         ++g->skipped[e];
                         break;
                     }
+            }
+        }
+        // The rest through vgmstream (CRI: .awb / .acb / .hca / .adx, also
+        // inside .cpk archives): the files by path, then its songs listed.
+        {
+            FileSet& set = *g->m->set;
+            for (const RomfsFile& f : all) { // (CRI's kinds only: a big game has 200,000 files)
+                const std::string l = lower(f.path);
+                const size_t dot = l.find_last_of('.');
+                const std::string ext = dot == std::string::npos ? std::string() : l.substr(dot);
+                if (ext == ".awb" || ext == ".acb" || ext == ".hca" || ext == ".adx" || ext == ".aax" || ext == ".cpk")
+                    set.files[l.size() && l[0] == '/' ? l.substr(1) : l] = {f.offset, f.size};
+            }
+            int cpks = 0, inCpk = 0;
+            for (const RomfsFile& f : all) {
+                const std::string l = lower(f.path);
+                if (l.size() < 4 || l.compare(l.size() - 4, 4, ".cpk") != 0) continue;
+                std::string cwhy;
+                const int n = addCpkFiles(set, l.size() && l[0] == '/' ? l.substr(1) : l, cwhy);
+                ++cpks;
+                inCpk += n;
+                logLine("  " + f.path + ": " + std::to_string(n) + " files" + (cwhy.empty() ? "" : " (" + cwhy + ")"));
+            }
+            if (cpks) logLine("cpk archives: " + std::to_string(cpks) + ", files in them " + std::to_string(inCpk));
+            std::vector<std::string> cri;
+            auto hasExt = [](const std::string& p, const char* e) {
+                const size_t n = std::strlen(e);
+                return p.size() > n && p.compare(p.size() - n, n, e) == 0;
+            };
+            for (const auto& [path, vf] : set.files) {
+                if (hasExt(path, ".awb") || hasExt(path, ".hca") || hasExt(path, ".adx") || hasExt(path, ".aax")) cri.push_back(path);
+                else if (hasExt(path, ".acb")) { // (alone: its songs inside it; beside an .awb, that's opened)
+                    if (!set.files.count(path.substr(0, path.size() - 4) + ".awb")) cri.push_back(path);
+                }
+            }
+            // A game with music folders: those only (the rest is voices, effects).
+            std::vector<std::string> music;
+            for (const std::string& p : cri)
+                if (p.find("bgm") != std::string::npos || p.find("music") != std::string::npos || p.find("/stream") != std::string::npos)
+                    music.push_back(p);
+            if (!music.empty()) cri.swap(music);
+            if (!cri.empty()) {
+                const size_t before = g->songs.size();
+                const auto started = std::chrono::steady_clock::now();
+                size_t looked = 0;
+                listVgmSongs(g->m->set, cri, 15.0, g->songs, [&]() {
+                    ++looked;
+                    return std::chrono::steady_clock::now() - started > std::chrono::seconds(90);
+                });
+                logLine("CRI files: " + std::to_string(cri.size()) + ", songs in them " + std::to_string(g->songs.size() - before) +
+                        (std::chrono::steady_clock::now() - started > std::chrono::seconds(90) ? " (stopped looking after 90 s)" : ""));
             }
         }
         // Compressed songs (.zs): the game's zstd dictionaries, from
@@ -1228,6 +1499,7 @@ std::unique_ptr<GameFiles> GameFiles::open(std::uint64_t appId, const std::strin
             const size_t before = g->songs.size();
             g->songs.erase(std::remove_if(g->songs.begin(), g->songs.end(),
                                           [](const Song& x) {
+                                              if (x.sub >= 0) return false; // (vgmstream songs: over 15 s already)
                                               const std::uint64_t n = x.inner >= 0 ? x.innerSize : x.size;
                                               return n < (x.zs && x.inner < 0 ? 128u : 512u) * 1024u;
                                           }),
@@ -1278,7 +1550,7 @@ bool GameFiles::read(const Song& s, std::vector<std::uint8_t>& out, std::string&
         why = "no memory for it just now";
         return false;
     }
-    std::lock_guard<std::mutex> lk(m->mu);
+    std::lock_guard<std::mutex> lk(m->set->mu);
     if (!m->nca->read(s.offset, out.data(), out.size())) { why = "it couldn't be read"; return false; }
     if (!s.zs) return inner(s, out, why);
     // Compressed: with the dictionary its frame names, else (naming none) on
@@ -1408,6 +1680,34 @@ void copySongs(GameFiles& g, const std::string& gameName, Progress& p) {
             }
             std::vector<std::uint8_t> data;
             std::string why;
+            if (s.sub >= 0) { // (vgmstream's: decoded, kept as IMA ADPCM)
+                std::unique_ptr<VgmSong> song = VgmSong::open(g.fileSet(), s.path, s.sub, why);
+                if (!song) {
+                    ++p.failed;
+                    logLine("  " + s.path + " #" + std::to_string(s.sub) + ": " + why);
+                    continue;
+                }
+                const std::uint64_t frames = std::min<std::uint64_t>(song->frames(), std::uint64_t(song->rate()) * 600u);
+                try {
+                    VgmSong* v = song.get();
+                    data = imaWavFrom([v](std::int16_t* out, size_t n) { return v->fill(out, n); }, frames, song->channels(), song->rate());
+                } catch (const std::bad_alloc&) {
+                    ++p.failed;
+                    logLine("  " + s.path + ": no memory for it");
+                    continue;
+                }
+                if (!writeSd(out, data, why)) {
+                    ++p.failed;
+                    logLine("  " + s.path + ": " + why);
+                    std::lock_guard<std::mutex> lk(p.mu);
+                    p.error = why;
+                    break;
+                }
+                ++p.done;
+                std::lock_guard<std::mutex> lk(p.mu);
+                p.files.push_back(out);
+                continue;
+            }
             if (!g.read(s, data, why)) {
                 ++p.failed;
                 logLine("  " + s.path + ": " + why);
@@ -1442,6 +1742,7 @@ void copySongs(GameFiles& g, const std::string& gameName, Progress& p) {
 
 struct GameFiles::Impl {};
 GameFiles::GameFiles() : m(std::make_unique<Impl>()) {}
+std::shared_ptr<FileSet> GameFiles::fileSet() const { return nullptr; }
 GameFiles::~GameFiles() = default;
 std::unique_ptr<GameFiles> GameFiles::open(std::uint64_t, const std::string&, std::string& why) {
     why = "only on the Switch";

@@ -577,12 +577,32 @@ void Audio::loadData(std::vector<unsigned char> data) {
 // and the list goes on after it.
 void Audio::preview(std::vector<unsigned char> data) {
     if (!m_open) return;
+    stopForPreview();
+    loadData(std::move(data));
+    startPreview();
+}
+
+// (a song vgmstream decodes as it plays: a CRI one, say)
+void Audio::preview(std::unique_ptr<gamemusic::WavStream> song) {
+    if (!m_open || !song) return;
+    stopForPreview();
+    if (m_current) Mix_FreeMusic(m_current);
+    m_current = nullptr;
+    m_trackData.clear();
+    m_stream = std::move(song);
+    if (SDL_RWops* rw = streamRw(m_stream.get())) m_current = Mix_LoadMUS_RW(rw, 1);
+    startPreview();
+}
+
+void Audio::stopForPreview() {
     m_wantTrack = -1;
     Mix_HookMusicFinished(nullptr);
     Mix_HaltMusic();
     Mix_HookMusicFinished(onTrackEnded);
     g_trackEnded = false;
-    loadData(std::move(data));
+}
+
+void Audio::startPreview() {
     m_isPlaying = m_current != nullptr;
     m_userPaused = false;
     m_position = 0.f;

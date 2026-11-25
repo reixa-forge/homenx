@@ -49,6 +49,7 @@ public:
     // (paths) only: just the songs in `order` (a playlist), else all but `off`.
     void setPlaylist(std::vector<std::string> off, std::vector<std::string> order, bool only = false);
     void preview(std::vector<unsigned char> song); // a game's song heard now (before it's copied)
+    void preview(std::unique_ptr<gamemusic::WavStream> song); // (one decoded as it plays)
     void stopPreview();                             // and back to the list
     bool previewing() const { return m_previewing; }
     void rescan();                      // new songs put on the SD card: found, no restart
@@ -94,6 +95,8 @@ private:
     std::unique_ptr<gamemusic::WavStream> m_stream; // (or a game's song, decoded as it plays)
     bool m_previewing = false;
     void loadData(std::vector<unsigned char> data);
+    void stopForPreview();
+    void startPreview();
     bool m_isPlaying = false, m_userPaused = false, m_sysPaused = false; // ours: SDL's asks took its lock
     long m_wantTrack = -1, m_jobTrack = -1;  // the song to play next, and the one being read
     std::future<std::vector<unsigned char>> m_trackJob;

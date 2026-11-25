@@ -18,6 +18,7 @@
 #include <atomic>
 #include <functional>
 #include <map>
+#include <mutex>
 #include <memory>
 #include <cstdint>
 #include <cstddef>
@@ -42,6 +43,7 @@ struct Progress {
 
 // A game's songs: its files opened (on a thread: it takes a second or two),
 // the songs listed; any one read (to hear it); the chosen ones copied.
+class FileSet;
 struct Song {
     std::string path;              // in the game
     std::uint64_t offset = 0, size = 0;
@@ -49,6 +51,8 @@ struct Song {
     std::string ext;               // ".bfstm" / ".bwav" (as it's copied: a .zs one decompressed)
     bool zs = false;               // compressed in the game (zstd)
     int inner = -1;                // a sound in a .bars: which one (offset / size: the .bars's)
+    int sub = -1;                  // a vgmstream song (CRI etc.): its subsong (0: the file's only one), path: its file
+    double seconds = 0;            // (vgmstream songs: how long, as played)
     std::uint64_t innerSize = 0;
     std::uint64_t bytes() const { return inner >= 0 ? innerSize : size; } // (its own size, about)
     bool chosen = true;
@@ -58,6 +62,7 @@ public:
     static std::unique_ptr<GameFiles> open(std::uint64_t appId, const std::string& gameName, std::string& why);
     ~GameFiles();
     bool read(const Song& song, std::vector<std::uint8_t>& out, std::string& why);
+    std::shared_ptr<FileSet> fileSet() const; // (vgmstream songs: open them from here)
     static bool inner(const Song& song, std::vector<std::uint8_t>& out, std::string& why); // (.bars: its sound cut out)
     std::vector<Song> songs;
     std::map<std::string, int> skipped; // files in formats not read yet, by kind
@@ -105,6 +110,58 @@ private:
 // LZ4 block (no frame): false if it doesn't come out exactly dstSize.
 bool lz4Block(const std::uint8_t* src, std::size_t srcSize, std::uint8_t* dst, std::size_t dstSize);
 
+// ---- vgmstream (lib/vgmstream): the formats HOME's own decoders don't read.
+
+// Files by path (lower-case, "/"-separated), each a piece of what `read`
+// reads (the game's RomFS; files inside .cpk archives are pieces of those).
+struct VirtualFile {
+    std::uint64_t offset = 0, size = 0;
+};
+class FileSet {
+public:
+    ReadAt read;
+    std::map<std::string, VirtualFile> files;
+    std::mutex mu; // (one read at a time: copying and hearing at once)
+    bool readFile(const VirtualFile& f, std::uint64_t at, void* buffer, std::size_t size);
+    const VirtualFile* find(const std::string& path) const;
+};
+
+// A .cpk's files (CRI's archive: its TOC table), added to `set` as
+// "<cpk path>/<dir>/<name>". Compressed ones (CRILAYLA) are left out.
+int addCpkFiles(FileSet& set, const std::string& cpkPath, std::string& why);
+
+// A song through vgmstream: opened from `set` (its companion files too, e.g.
+// .acb + .awb), decoded to 16-bit PCM, once through then its loop again
+// fading out (8 s), downmixed to stereo.
+class VgmSong {
+public:
+    static std::unique_ptr<VgmSong> open(std::shared_ptr<FileSet> set, const std::string& path, int subsong, std::string& why);
+    ~VgmSong();
+    int channels() const;
+    int rate() const;
+    std::uint64_t frames() const;     // as played
+    int subsongs() const;             // in its file
+    std::string name() const;         // its own name, if it has one
+    std::size_t fill(std::int16_t* out, std::size_t frames); // interleaved; 0 at the end
+    void restart();
+private:
+    VgmSong();
+    struct Impl;
+    std::unique_ptr<Impl> m;
+};
+
+// The songs in `paths` (files of `set` vgmstream may read: .acb / .awb /
+// .hca / .adx ...), each subsong over `minSeconds`; `stop` ends it early.
+void listVgmSongs(std::shared_ptr<FileSet> set, const std::vector<std::string>& paths, double minSeconds,
+                  std::vector<Song>& out, const std::function<bool()>& stop);
+
+// IMA ADPCM .wav (4 bits a sample: ~3 MB a minute of stereo 48 kHz): how
+// vgmstream songs are kept on the SD card. HOME plays them itself (WavStream).
+std::vector<std::uint8_t> imaWav(const std::vector<std::int16_t>& pcm, int channels, int rate);
+// The same, its samples pulled a block at a time (`pull` fills up to n frames, 0 at the end).
+std::vector<std::uint8_t> imaWavFrom(const std::function<std::size_t(std::int16_t*, std::size_t)>& pull, std::uint64_t frames,
+                                     int channels, int rate);
+
 // A SARC archive's files (Nintendo's: little- or big-endian).
 struct SarcFile {
     std::string name;
@@ -125,9 +182,11 @@ struct Stream {
 // A .bfstm / .bwav seen as a .wav (16-bit), decoded as it's read: once
 // through, then (a looping one) the loop again fading out, at most 6 minutes.
 // HOME plays the game's own files with it (they're 3-4x smaller than WAVs).
+class VgmSong;
 class WavStream {
 public:
     static std::unique_ptr<WavStream> open(std::vector<std::uint8_t> file, std::string& why);
+    static std::unique_ptr<WavStream> open(std::unique_ptr<VgmSong> song); // (decoded by vgmstream as it plays)
     ~WavStream();
     std::uint64_t size() const;                              // the whole .wav, its header too
     std::size_t read(std::uint64_t offset, void* buffer, std::size_t size); // (any order: back means from the start)

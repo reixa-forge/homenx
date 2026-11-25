@@ -23,6 +23,7 @@ they were.
 | Atmosphère-libs (libstratosphere) | Atmosphère-NX | GPL-2.0 |
 | libtesla (the achievements overlay, patched) | WerWolv | GPL-2.0 |
 | libnxtc | DarkMatterCore | ISC |
+| vgmstream (lib/vgmstream, its COPYING kept) | vgmstream contributors, <https://github.com/vgmstream/vgmstream> | ISC |
 | eSpeak NG | eSpeak NG contributors | GPL-3.0-or-later |
 | SDL2, SDL2_mixer, SDL2_ttf | Sam Lantinga and contributors | zlib |
 | FreeType (through SDL2_ttf) | The FreeType Project | FreeType License |

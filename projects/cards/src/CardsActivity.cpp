@@ -12506,15 +12506,18 @@ void CardsActivity::checkGameMusicJob() {
         openSongPicker();
     } else if (job == 2) {
         std::vector<std::uint8_t> song;
+        std::unique_ptr<gamemusic::WavStream> stream;
         std::string why;
         {
             std::lock_guard<std::mutex> lk(m_gmMu);
             song = std::move(m_gmHeard);
+            stream = std::move(m_gmHeardStream);
             why = m_gmWhy;
         }
-        if (song.empty()) { say(trf("It can't be played: {why}", {why})); m_gmHearing = -1; return; }
+        if (song.empty() && !stream) { say(trf("It can't be played: {why}", {why})); m_gmHearing = -1; return; }
         m_audio.setMusic(true, m_settings.musicVolume);
-        m_audio.preview(std::move(song));
+        if (stream) m_audio.preview(std::move(stream));
+        else m_audio.preview(std::move(song));
         if (!m_audio.previewing()) { say("It can't be played."); m_gmHearing = -1; }
     } else if (job == 3) {
         checkGameMusic();
@@ -12539,11 +12542,20 @@ void CardsActivity::listenToSong(int k) {
     const gamemusic::Song song = files->songs[(size_t)k];
     gameMusicJob(2, [this, files, song]() {
         std::vector<std::uint8_t> data;
+        std::unique_ptr<gamemusic::WavStream> stream;
         std::string why;
-        if (!files->read(song, data, why)) data.clear();
-        else if (!gamemusic::isStream(data)) { data.clear(); why = "not a song it can play"; }
+        if (song.sub >= 0) { // (vgmstream's: decoded as it plays)
+            stream = gamemusic::WavStream::open(gamemusic::VgmSong::open(files->fileSet(), song.path, song.sub, why));
+            if (!stream && why.empty()) why = "it couldn't be opened";
+        } else if (!files->read(song, data, why)) {
+            data.clear();
+        } else if (!gamemusic::isStream(data)) {
+            data.clear();
+            why = "not a song it can play";
+        }
         std::lock_guard<std::mutex> lk(m_gmMu);
         m_gmHeard = std::move(data);
+        m_gmHeardStream = std::move(stream);
         m_gmWhy = why;
     });
 }

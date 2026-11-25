@@ -99,6 +99,21 @@ target("espeak-ucd")
     add_includedirs("lib/espeak-ng/src/ucd-tools/src/include", {public = true})
 target_end()
 
+-- vgmstream (lib/vgmstream: ISC licence, its COPYING kept): games' audio
+-- formats HOME's own decoders don't read (CRI HCA / ADX and many more), for
+-- + > Copy its music. Built-in codecs only (no external libraries).
+target("vgmstream")
+    set_kind("static")
+    set_default(false)
+    if not is_plat("cross") then return end
+
+    set_toolchains("devkita64")
+    set_languages("gnu11")
+    add_files("lib/vgmstream/src/*.c", "lib/vgmstream/src/*/*.c", "lib/vgmstream/src/*/*/*.c")
+    add_includedirs("lib/vgmstream/src", {public = true})
+    add_cflags("-w", "-O2", {force = true})
+target_end()
+
 target("espeak-ng")
     set_kind("static")
     set_default(false)
@@ -176,7 +191,7 @@ target("SwitchU")
     set_languages("c++20")
     add_rules("switch")
 
-    add_deps("nxui")
+    add_deps("nxui", "vgmstream")
     add_includedirs("projects/common/include", {public = false})
     add_includedirs("projects/menu/src", {public = false})
     add_files("projects/menu/src/**.cpp")
@@ -189,7 +204,7 @@ target("SwitchU")
     -- (fonts, icons, the GameTDB index) ship in switch/SwitchU/cards/.
     add_files("projects/cards/src/Audio.cpp", "projects/cards/src/CardsActivity.cpp", "projects/cards/src/Library.cpp",
               "projects/cards/src/GameCard.cpp", "projects/cards/src/Mtp.cpp", "projects/cards/src/Spotify.cpp",
-              "projects/cards/src/GameMusic.cpp", "projects/cards/src/Zstd.cpp")
+              "projects/cards/src/GameMusic.cpp", "projects/cards/src/GameMusicVgm.cpp", "projects/cards/src/Zstd.cpp")
     add_files("projects/updater/src/Catalog.cpp") -- homebrew updates, as the Homebrew Manager finds them
     add_includedirs("projects/cards/src", {public = false})
     add_defines("HOMENX_UPDATER_SHARED_NETWORK", homenx_build_define)
@@ -394,7 +409,7 @@ target("CardsNX")
     set_languages("c++20")
     add_rules("switch")
 
-    add_deps("nxui")
+    add_deps("nxui", "vgmstream")
     add_includedirs("projects/common/include", {public = false})
     add_includedirs("projects/menu/src", {public = false})
     add_includedirs("projects/cards/src", {public = false})

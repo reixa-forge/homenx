@@ -301,6 +301,7 @@ private:
     std::unique_ptr<gamemusic::GameFiles> m_gmOpened;   //  (1) the files
     std::string m_gmWhy;                                //  (1, 2) why not
     std::vector<std::uint8_t> m_gmHeard;                //  (2) the song's bytes
+    std::unique_ptr<gamemusic::WavStream> m_gmHeardStream; //  (2) or it, decoded as it plays
     int m_gmHearing = -1;                               // the song being heard
     std::string m_gmPickerTitle;
     void copyGameMusic(const Game& game);
