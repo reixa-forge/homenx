@@ -48,6 +48,9 @@ struct Song {
     std::string name;              // the file's name on the SD card (he can change it)
     std::string ext;               // ".bfstm" / ".bwav" (as it's copied: a .zs one decompressed)
     bool zs = false;               // compressed in the game (zstd)
+    int inner = -1;                // a sound in a .bars: which one (offset / size: the .bars's)
+    std::uint64_t innerSize = 0;
+    std::uint64_t bytes() const { return inner >= 0 ? innerSize : size; } // (its own size, about)
     bool chosen = true;
 };
 class GameFiles {
@@ -55,6 +58,7 @@ public:
     static std::unique_ptr<GameFiles> open(std::uint64_t appId, const std::string& gameName, std::string& why);
     ~GameFiles();
     bool read(const Song& song, std::vector<std::uint8_t>& out, std::string& why);
+    static bool inner(const Song& song, std::vector<std::uint8_t>& out, std::string& why); // (.bars: its sound cut out)
     std::vector<Song> songs;
     std::map<std::string, int> skipped; // files in formats not read yet, by kind
     int fileCount = 0;
@@ -133,7 +137,9 @@ private:
     struct Impl;
     std::unique_ptr<Impl> m;
 };
-bool isStream(const std::vector<std::uint8_t>& file); // a .bfstm / .bwav it can read
+bool isStream(const std::vector<std::uint8_t>& file); // a .bfstm / .bwav / .bfwav it can read
+// A .bars's sounds (BWAV / FWAV): where each one is, and its size.
+bool barsAssets(const std::vector<std::uint8_t>& bars, std::vector<std::pair<std::size_t, std::size_t>>& out);
 
 // Reads a .bfstm or .bwav from memory and writes a .wav (16-bit) to `out`.
 // False (and why) when the file isn't one it can read.

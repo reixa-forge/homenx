@@ -12572,7 +12572,7 @@ void CardsActivity::openSongPicker(int chosen) {
         int n = 0;
         std::uint64_t bytes = 0;
         for (const auto& s : m_gmFiles->songs)
-            if (s.chosen) { ++n; bytes += s.size; }
+            if (s.chosen) { ++n; bytes += s.bytes(); }
         return std::to_string(n) + " · " + std::to_string(bytes >> 20) + " MB";
     };
     items.push_back(action("Choose all", [this]() {
@@ -12648,7 +12648,7 @@ void CardsActivity::openSongOptions(int k) {
     }));
     items.back().glyph = "tag";
     items.push_back(action("Back", [this, row]() { openSongPicker(row); }));
-    openMenu(s.name + " · " + std::to_string(std::max<std::uint64_t>(1, s.size >> 20)) + " MB", std::move(items));
+    openMenu(s.name + " · " + std::to_string(std::max<std::uint64_t>(1, s.bytes() >> 20)) + " MB", std::move(items));
     m_menuBack = [this, row]() { openSongPicker(row); };
 }
 

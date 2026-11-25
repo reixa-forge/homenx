@@ -328,7 +328,7 @@ void Audio::rescan() {
         auto isSong = [](const std::filesystem::path& p) {
             std::string ext = p.extension().string();
             for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            return ext == ".mp3" || ext == ".ogg" || ext == ".wav" || ext == ".bfstm" || ext == ".bwav";
+            return ext == ".mp3" || ext == ".ogg" || ext == ".wav" || ext == ".bfstm" || ext == ".bwav" || ext == ".bfwav";
         };
         for (const std::string& dir : {std::string("sdmc:/music"), std::string("sdmc:/config/CardsNX/music"), std::string(kSounds) + "/music"}) {
             std::error_code ec;

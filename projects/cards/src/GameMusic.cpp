@@ -242,6 +242,52 @@ bool parseBwav(const std::vector<std::uint8_t>& d, Parsed& out, std::string& why
     return true;
 }
 
+// .bfwav (FWAV: a whole sound in one file, older games and .bars): INFO
+// (codec, loop, rate, loop start / end, a table of channels: each one's
+// samples from DATA + 8, and its DSP coefficients), then DATA.
+bool parseFwav(const std::vector<std::uint8_t>& d, Parsed& out, std::string& why) {
+    Reader r{d};
+    r.big = d.size() > 6 && d[4] == 0xFE && d[5] == 0xFF;
+    const std::uint16_t sections = r.u16(0x10);
+    size_t info = 0, data = 0;
+    for (std::uint16_t i = 0; i < sections && i < 8; ++i) {
+        const size_t ref = 0x14 + size_t(i) * 12;
+        const std::uint16_t type = r.u16(ref);
+        if (type == 0x7000) info = r.u32(ref + 4);
+        if (type == 0x7001) data = r.u32(ref + 4);
+    }
+    if (!info || !data) { why = "no INFO or DATA"; return false; }
+    const size_t ib = info + 8;
+    const std::uint8_t codec = r.u8(ib);
+    if (codec > 2) { why = codec == 3 ? "IMA-ADPCM" : "codec " + std::to_string(codec); return false; }
+    out.info.loops = r.u8(ib + 1) != 0;
+    out.info.sampleRate = static_cast<int>(r.u32(ib + 4));
+    out.info.loopStart = r.u32(ib + 8);
+    out.info.samples = r.u32(ib + 0xC);
+    out.info.loopEnd = out.info.samples;
+    const size_t table = ib + 0x14;
+    const std::uint32_t chans = r.u32(table);
+    if (chans < 1 || chans > 8 || !out.info.sampleRate || !out.info.samples) { why = "odd sound info"; return false; }
+    out.info.channels = static_cast<int>(chans);
+    for (std::uint32_t c = 0; c < chans; ++c) {
+        const size_t chInfo = table + r.u32(table + 4 + size_t(c) * 8 + 4);
+        Channel ch;
+        ch.codec = static_cast<Channel::Codec>(codec);
+        ch.big = r.big;
+        ch.blocked = false;
+        ch.start = data + 8 + r.u32(chInfo + 4);
+        if (codec == 2) {
+            const size_t dsp = chInfo + r.u32(chInfo + 0xC);
+            for (int k = 0; k < 16; ++k) ch.coefs[k] = r.s16(dsp + size_t(k) * 2);
+            ch.hist1 = r.s16(dsp + 0x22);
+            ch.hist2 = r.s16(dsp + 0x24);
+        }
+        ch.loopUnit = codec == 2 ? out.info.loopStart / 14 : out.info.loopStart;
+        out.ch.push_back(ch);
+    }
+    return true;
+}
+
 void put16(std::vector<std::uint8_t>& b, std::uint16_t v) { b.push_back(v & 0xFF); b.push_back(v >> 8); }
 void put32(std::vector<std::uint8_t>& b, std::uint32_t v) { for (int i = 0; i < 4; ++i) b.push_back((v >> (8 * i)) & 0xFF); }
 
@@ -352,6 +398,8 @@ std::unique_ptr<WavStream> WavStream::open(std::vector<std::uint8_t> file, std::
         if (!parseBfstm(i.file, i.p, why)) return nullptr;
     } else if (m == "BWAV") {
         if (!parseBwav(i.file, i.p, why)) return nullptr;
+    } else if (m == "FWAV") {
+        if (!parseFwav(i.file, i.p, why)) return nullptr;
     } else {
         why = "not a stream";
         return nullptr;
@@ -405,7 +453,34 @@ size_t WavStream::read(std::uint64_t off, void* buffer, size_t n) {
 
 bool isStream(const std::vector<std::uint8_t>& file) {
     const std::string m = magic(file);
-    return m == "FSTM" || m == "BWAV";
+    return m == "FSTM" || m == "BWAV" || m == "FWAV";
+}
+
+// .bars: a count, its names' hashes, then each sound's (AMTA, asset) offsets.
+bool barsAssets(const std::vector<std::uint8_t>& d, std::vector<std::pair<std::size_t, std::size_t>>& out) {
+    if (d.size() < 0x10 || std::memcmp(d.data(), "BARS", 4) != 0) return false;
+    const bool big = d[8] == 0xFE && d[9] == 0xFF;
+    auto u32 = [&](size_t o) -> std::uint32_t {
+        if (o + 4 > d.size()) return 0;
+        return big ? (std::uint32_t(d[o]) << 24 | std::uint32_t(d[o + 1]) << 16 | std::uint32_t(d[o + 2]) << 8 | d[o + 3])
+                   : (std::uint32_t(d[o]) | std::uint32_t(d[o + 1]) << 8 | std::uint32_t(d[o + 2]) << 16 | std::uint32_t(d[o + 3]) << 24);
+    };
+    const std::uint32_t count = u32(0xC);
+    if (count > 100000 || 0x10 + size_t(count) * 12 > d.size()) return false;
+    std::vector<std::size_t> starts;
+    for (std::uint32_t i = 0; i < count; ++i) {
+        const std::uint32_t asset = u32(0x10 + size_t(count) * 4 + size_t(i) * 8 + 4);
+        if (asset && asset != 0xFFFFFFFFu && asset + 4 <= d.size()) starts.push_back(asset);
+    }
+    std::vector<std::size_t> sorted = starts;
+    std::sort(sorted.begin(), sorted.end());
+    for (std::size_t a : starts) { // (each runs to the next one, or the end)
+        const auto next = std::upper_bound(sorted.begin(), sorted.end(), a);
+        const std::size_t end = next == sorted.end() ? d.size() : *next;
+        const std::string m(reinterpret_cast<const char*>(&d[a]), 4);
+        if (m == "BWAV" || m == "FWAV") out.push_back({a, end - a});
+    }
+    return true;
 }
 
 bool convert(const std::vector<std::uint8_t>& file, const std::string& outPath, std::string& why) {
@@ -1037,26 +1112,31 @@ std::unique_ptr<GameFiles> GameFiles::open(std::uint64_t appId, const std::strin
             return nullptr;
         }
         g->fileCount = static_cast<int>(all.size());
+        std::vector<RomfsFile> barsFiles; // (sound archives: their sounds listed below)
         for (RomfsFile& f : all) {
             const std::string name = lower(f.path);
             const auto ends = [&name](const char* e) {
                 const size_t n = std::strlen(e);
                 return name.size() >= n && name.compare(name.size() - n, n, e) == 0;
             };
-            const bool zs = ends(".bfstm.zs") || ends(".bwav.zs");
-            if (zs || ends(".bfstm") || ends(".bwav")) {
+            const bool zs = ends(".bfstm.zs") || ends(".bwav.zs") || ends(".bfwav.zs");
+            if (ends(".bars") || ends(".bars.zs")) {
+                barsFiles.push_back(f);
+                continue;
+            }
+            if (zs || ends(".bfstm") || ends(".bwav") || ends(".bfwav")) {
                 Song s;
                 std::filesystem::path stem = std::filesystem::path(f.path).stem(); // (x.bwav.zs: x.bwav)
                 if (zs) stem = stem.stem();
                 s.name = safeName(stem.string());
-                s.ext = (ends(".bfstm") || ends(".bfstm.zs")) ? ".bfstm" : ".bwav";
+                s.ext = (ends(".bfstm") || ends(".bfstm.zs")) ? ".bfstm" : (ends(".bfwav") || ends(".bfwav.zs")) ? ".bfwav" : ".bwav";
                 s.path = f.path;
                 s.offset = f.offset;
                 s.size = f.size;
                 s.zs = zs;
                 g->songs.push_back(std::move(s));
             } else {
-                for (const char* e : {".bars", ".bars.zs", ".wem", ".bnk", ".bank", ".acb", ".awb", ".hca",
+                for (const char* e : {".wem", ".bnk", ".bank", ".acb", ".awb", ".hca",
                                       ".opus", ".lopus", ".pak", ".cpk", ".utoc", ".ucas"})
                     if (ends(e)) {
                         ++g->skipped[e];
@@ -1087,13 +1167,70 @@ std::unique_ptr<GameFiles> GameFiles::open(std::uint64_t appId, const std::strin
                 break;
             }
         }
+        // Sound archives (.bars): each one's longer sounds (over ~5 s: most are
+        // short effects) as songs. Read whole to list them, so up to 256 MB in all.
+        if (!barsFiles.empty()) {
+            std::uint64_t total = 0;
+            for (const RomfsFile& f : barsFiles) total += f.size;
+            if (total > (256u << 20)) {
+                logLine("sound archives: " + std::to_string(barsFiles.size()) + " (" + std::to_string(total >> 20) +
+                        " MB): too many to look through");
+            } else {
+                size_t found = 0;
+                std::vector<std::uint8_t> raw, plain;
+                for (const RomfsFile& f : barsFiles) {
+                    const bool zs = lower(f.path).size() > 3 && lower(f.path).compare(lower(f.path).size() - 3, 3, ".zs") == 0;
+                    raw.resize(static_cast<size_t>(f.size));
+                    if (!nca->read(f.offset, raw.data(), raw.size())) continue;
+                    const std::vector<std::uint8_t>* bars = &raw;
+                    if (zs) {
+                        plain.clear();
+                        std::string zwhy;
+                        std::vector<const zstd::Dictionary*> dicts;
+                        for (const auto& d : g->m->dicts) dicts.push_back(d.get());
+                        bool ok = zstd::decompress(raw.data(), raw.size(), plain, zstd::frameDictionary(raw.data(), raw.size()) ? dicts : std::vector<const zstd::Dictionary*>{}, zwhy, 64u << 20);
+                        for (size_t k = 0; !ok && k < dicts.size(); ++k) {
+                            plain.clear();
+                            ok = zstd::decompress(raw.data(), raw.size(), plain, {dicts[k]}, zwhy, 64u << 20);
+                        }
+                        if (!ok) continue;
+                        bars = &plain;
+                    }
+                    std::vector<std::pair<size_t, size_t>> assets;
+                    if (!barsAssets(*bars, assets)) continue;
+                    std::filesystem::path stem = std::filesystem::path(f.path).stem();
+                    if (zs) stem = stem.stem();
+                    for (size_t k = 0; k < assets.size(); ++k) {
+                        if (assets[k].second < 256u * 1024u) continue;
+                        std::vector<std::uint8_t> one(bars->begin() + static_cast<std::ptrdiff_t>(assets[k].first),
+                                                      bars->begin() + static_cast<std::ptrdiff_t>(assets[k].first + assets[k].second));
+                        if (!isStream(one)) continue;
+                        Song s;
+                        s.name = safeName(stem.string() + " " + std::to_string(k + 1));
+                        s.ext = std::memcmp(one.data(), "FWAV", 4) == 0 ? ".bfwav" : ".bwav";
+                        s.path = f.path;
+                        s.offset = f.offset;
+                        s.size = f.size;
+                        s.zs = zs;
+                        s.inner = static_cast<int>(k);
+                        s.innerSize = assets[k].second;
+                        g->songs.push_back(std::move(s));
+                        ++found;
+                    }
+                }
+                logLine("sound archives: " + std::to_string(barsFiles.size()) + ", longer sounds in them " + std::to_string(found));
+            }
+        }
         // A game with hundreds: its sound effects among them. Under ~10 seconds
         // (512 KB of DSP-ADPCM stereo, a quarter of that compressed) left out.
         size_t shortOnes = 0;
         if (g->songs.size() > 300) {
             const size_t before = g->songs.size();
             g->songs.erase(std::remove_if(g->songs.begin(), g->songs.end(),
-                                          [](const Song& x) { return x.size < (x.zs ? 128u : 512u) * 1024u; }),
+                                          [](const Song& x) {
+                                              const std::uint64_t n = x.inner >= 0 ? x.innerSize : x.size;
+                                              return n < (x.zs && x.inner < 0 ? 128u : 512u) * 1024u;
+                                          }),
                            g->songs.end());
             shortOnes = before - g->songs.size();
         }
@@ -1143,7 +1280,7 @@ bool GameFiles::read(const Song& s, std::vector<std::uint8_t>& out, std::string&
     }
     std::lock_guard<std::mutex> lk(m->mu);
     if (!m->nca->read(s.offset, out.data(), out.size())) { why = "it couldn't be read"; return false; }
-    if (!s.zs) return true;
+    if (!s.zs) return inner(s, out, why);
     // Compressed: with the dictionary its frame names, else (naming none) on
     // its own, then each of the game's.
     std::vector<std::uint8_t> plain;
@@ -1167,6 +1304,17 @@ bool GameFiles::read(const Song& s, std::vector<std::uint8_t>& out, std::string&
     }
     if (!ok) { why = "it couldn't be decompressed (" + why + ")"; return false; }
     out = std::move(plain);
+    return inner(s, out, why);
+}
+
+// A sound in a .bars: cut out of it.
+bool GameFiles::inner(const Song& s, std::vector<std::uint8_t>& out, std::string& why) {
+    if (s.inner < 0) return true;
+    std::vector<std::pair<size_t, size_t>> assets;
+    if (!barsAssets(out, assets) || static_cast<size_t>(s.inner) >= assets.size()) { why = "its sound archive changed"; return false; }
+    const auto [at, n] = assets[(size_t)s.inner];
+    std::vector<std::uint8_t> one(out.begin() + static_cast<std::ptrdiff_t>(at), out.begin() + static_cast<std::ptrdiff_t>(at + n));
+    out = std::move(one);
     return true;
 }
 
@@ -1233,7 +1381,7 @@ void copySongs(GameFiles& g, const std::string& gameName, Progress& p) {
         for (const Song& s : g.songs)
             if (s.chosen) {
                 ++p.found;
-                need += s.size;
+                need += s.bytes();
             }
         if (FsFileSystem* fs = fsdevGetDeviceFileSystem("sdmc")) {
             s64 free = 0;
@@ -1303,6 +1451,7 @@ bool GameFiles::read(const Song&, std::vector<std::uint8_t>&, std::string& why) 
     why = "only on the Switch";
     return false;
 }
+bool GameFiles::inner(const Song&, std::vector<std::uint8_t>&, std::string&) { return false; }
 std::string songFolder(const std::string& gameName) { return "sdmc:/music/" + gameName; }
 void copySongs(GameFiles&, const std::string&, Progress& p) {
     std::lock_guard<std::mutex> lk(p.mu);
