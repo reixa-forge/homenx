@@ -1273,15 +1273,26 @@ bool openGame(std::uint64_t appId, const Keys& keys, Nca& nca, std::string& why)
     }
     std::string packWhy;
     std::vector<std::uint8_t> table;
+    int tryNo = 0;
     for (const Key& k : tries) {
+        ++tryNo;
         nca.key = k;
         nca.compressed.reset();
         if (packed) {
             std::vector<CompressedPiece> pieces;
             table.resize(static_cast<size_t>(std::min<std::uint64_t>(packSize, 64u << 20)));
             if (!nca.readSection(packOff, table.data(), table.size()) ||
-                !parseCompressionTable(table, packEntries, pieces, packWhy))
-                continue; // (the wrong key reads garbage)
+                !parseCompressionTable(table, packEntries, pieces, packWhy)) {
+                // (the wrong key reads garbage) Logged for a look: the table's first bytes, decrypted
+                // (metadata, not a key), with where it sits and why it was refused.
+                char head[40] = {};
+                for (int i = 0; i < 16 && i < static_cast<int>(table.size()); ++i)
+                    std::snprintf(head + 2 * i, 3, "%02x", table[static_cast<size_t>(i)]);
+                logLine("table try " + std::to_string(tryNo) + ": at " + std::to_string(packOff) + ", size " +
+                        std::to_string(packSize) + ", entries " + std::to_string(packEntries) + ", starts " + head +
+                        " (" + packWhy + ")");
+                continue;
+            }
             Nca* self = &nca;
             nca.compressed = std::make_unique<CompressedStorage>(
                 std::move(pieces), romfsEnd,
