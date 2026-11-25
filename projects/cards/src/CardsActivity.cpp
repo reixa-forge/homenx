@@ -4547,9 +4547,12 @@ void CardsActivity::openOptions() {
     }
 #endif
     if (g.action.empty()) {
-        items.push_back(action(m_settings.customPagesMove ? "Move to custom page" : "Add to custom page",
-                               [this, g]() { addToCustomPage(g); }));
+        items.push_back(action("Move to custom page", [this, g]() { addToCustomPage(g, true); }));
         items.back().glyph = "copy";
+        items.back().detail = "Off its own page and onto the custom one (deleting the page puts it back)";
+        items.push_back(action("Add to custom page", [this, g]() { addToCustomPage(g, false); }));
+        items.back().glyph = "copy";
+        items.back().detail = "A copy: it stays on its own page too";
         if (m_page >= kPageCount) {
             const int page = m_page;
             const auto& here = m_settings.customPages[page - kPageCount].moved;
@@ -7020,11 +7023,6 @@ void CardsActivity::buildSettings() {
     shown.detail = "Hide a page you don't use: ZL / ZR skip it";
     home.rows.push_back(std::move(shown));
     home.rows.push_back(action("Custom pages", [this]() { m_sheetOpen = false; openCustomPages(); }));
-    home.rows.push_back(toggle("Move games to custom pages", [this]() { return m_settings.customPagesMove; },
-        [this, save]() {
-            m_settings.customPagesMove = !m_settings.customPagesMove;
-            save();
-        }, "On: + moves a game onto a custom page, off its own page (no copies). Deleting the page puts it back. Off: + adds a copy"));
     home.rows.push_back(toggle("Genre pages", [this]() { return m_settings.genrePages; },
         [this, save]() {
             m_settings.genrePages = !m_settings.genrePages;
@@ -12395,11 +12393,21 @@ void CardsActivity::copyGameMusic(const Game& game) {
                   gamemusic::Progress* p = m_gm.get();
                   const std::uint64_t id = g.id;
                   const std::string name = g.name;
-                  m_gmThread = std::thread([p, id, name]() {
-                      offScreenCore();
-                      gamemusic::copyGameMusic(id, name, *p);
-                      threadDone();
-                  });
+                  if (std::FILE* f = std::fopen("sdmc:/config/CardsNX/gamemusic.log", "a")) { // (so a try always shows)
+                      std::fprintf(f, "asked: %s (%016llX)\n", name.c_str(), static_cast<unsigned long long>(id));
+                      std::fclose(f);
+                  }
+                  try {
+                      m_gmThread = std::thread([p, id, name]() {
+                          offScreenCore();
+                          gamemusic::copyGameMusic(id, name, *p);
+                          threadDone();
+                      });
+                  } catch (...) {
+                      m_gm.reset();
+                      notifyCard(g.name, tr("No music copied: it couldn't start"), "music");
+                      return;
+                  }
                   say(trf("Copying {game}'s music... you can carry on.", {g.name}));
               }, true),
               action("Cancel", [] {})});
@@ -14610,8 +14618,7 @@ void CardsActivity::editCustomPage(int page) {
 // + > Add to (or Move to) custom page. Moving takes the game off its own page,
 // and off any other custom page it had been moved to (one place at a time);
 // adding leaves it where it is, as a copy.
-void CardsActivity::addToCustomPage(const Game& game) {
-    const bool move = m_settings.customPagesMove;
+void CardsActivity::addToCustomPage(const Game& game, bool move) {
     std::vector<MenuItem> items;
     for (int page = kPageCount; page < pageCount(); ++page)
         if (!m_settings.customPages[page - kPageCount].genre) // (made from genres: they'd be undone)

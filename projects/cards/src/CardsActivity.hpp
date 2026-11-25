@@ -85,7 +85,7 @@ private:
     void openCustomPages();
     void openPagePicker();
     void editCustomPage(int page);
-    void addToCustomPage(const Game& game);
+    void addToCustomPage(const Game& game, bool move);
     void openStorage();
     void readStorage(bool withTitles = false);
     bool m_storageWantTitles = false;
