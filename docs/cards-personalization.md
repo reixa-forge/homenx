@@ -5,7 +5,7 @@ CardsNX app. The shared HOME lock screen also shows a battery icon and uses the
 same wallpaper rotation selection.
 
 - **Custom pages:** Settings > Home > Custom pages creates, renames or deletes
-  a named collection (up to eight). Use **+ > Add to custom page** on a game or
+  a named collection (up to eight). Use **+ > Move to… > Add a copy to a page…** on a game or
   app. Collections leave the original library entries intact. ZL/ZR, page order,
   page visibility, and the top-left **Pages** menu include the new pages. Deleting
   a page does not uninstall anything. Membership and ordering survive restarts.
