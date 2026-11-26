@@ -4512,6 +4512,7 @@ void CardsActivity::openMenu(std::string title, std::vector<MenuItem> items) {
     const bool again = m_backArm && m_backArmList && title == m_backArmTitle;
     const int sel = m_backArmSel;
     std::function<void()> parent = std::move(m_backArmParent);
+    if (m_backArm && m_backArmList && !again) m_backClaimed = true;
     std::function<void()> back = takeBackArm();
     m_menuTitle = std::move(title);
     m_menu = std::move(items);
@@ -4521,7 +4522,12 @@ void CardsActivity::openMenu(std::string title, std::vector<MenuItem> items) {
     if (!again) m_audio.play("show_modal");
 }
 
-void CardsActivity::armBackToList() {
+void CardsActivity::armBackToList(const MenuItem& row) {
+    m_backClaimed = false;
+    m_backArmSaves = m_settings.saves;
+    // A row that goes somewhere itself on purpose (Back, Cancel): what it opens
+    // isn't a step forward, so this list isn't its way back.
+    if (row.label == "Back" || row.label == "Cancel") return;
     m_backArmList = true;
     m_backArmTitle = m_menuTitle;
     m_backArmSel = m_menuSel;
@@ -4533,6 +4539,15 @@ void CardsActivity::armBackToList() {
     };
 }
 
+void CardsActivity::endBackArm() {
+    // The run changed something (a page or a playlist deleted, ...) and then
+    // opened a list: the copy of the list it was run from may be about what's
+    // gone, so B there closes instead of going back to it.
+    if (m_backClaimed && m_settings.saves != m_backArmSaves) m_menuBack = nullptr;
+    m_backClaimed = false;
+    takeBackArm();
+}
+
 void CardsActivity::armBackToOptions() {
     m_backArmList = false;
     m_backArmParent = nullptr;
@@ -4541,7 +4556,9 @@ void CardsActivity::armBackToOptions() {
 
 // Back to the + sheet (B on what one of its buttons opened): that level, that button.
 void CardsActivity::reopenOptions(const Game& g, plus::Level level, int sel) {
-    m_optGame = g;
+    const Game* now = current();
+    if (m_storageJob.valid() || !now || now->id != g.id || now->path != g.path) return; // (it moved or went: closed)
+    m_optGame = *now;
     m_optLevel = level;
     m_optOpen = false; // (showOptionLevel: a sheet opening, not a level change)
     showOptionLevel(level);
@@ -9492,16 +9509,16 @@ void CardsActivity::listInput(std::vector<MenuItem>& items, int& sel, const std:
     const bool popup = &items == &m_menu; // (B from what its rows open: this list again)
     if (in.isDown(B::X) && item.onX) {
         auto run = item.onX; // (it may open the list again)
-        if (popup) armBackToList();
+        if (popup) armBackToList(item);
         run();
-        takeBackArm();
+        endBackArm();
         return;
     }
     if (in.isDown(B::Y) && item.onY) {
         auto run = item.onY;
-        if (popup) armBackToList();
+        if (popup) armBackToList(item);
         run();
-        takeBackArm();
+        endBackArm();
         return;
     }
     if (in.isDown(B::A)) {
@@ -9510,11 +9527,11 @@ void CardsActivity::listInput(std::vector<MenuItem>& items, int& sel, const std:
             m_audio.play(item.kind == MenuItem::Toggle && item.level && item.level() < 0.5f ? "toggle_off" : "toggle_on");
         } else if (item.kind == MenuItem::Action && item.run) {
             auto run = item.run; // close() may take the list (and the row) away
-            if (popup) armBackToList();
+            if (popup) armBackToList(item);
             if (!item.stay) close();
             else m_audio.play("activation");
             run();
-            takeBackArm();
+            endBackArm();
         }
     }
 }
@@ -9711,13 +9728,13 @@ bool CardsActivity::handleTouch() {
         const nxui::Rect r{box.x + 14.f, box.y + 66.f + rowH * static_cast<float>(shownRow), box.width - 28.f, rowH - 6.f};
         if (tapRow(item, r, r.x + r.width - 18.f - 150.f, 150.f) && item.run) {
             auto run = item.run;
-            armBackToList();
+            armBackToList(item);
             if (!item.stay) {
                 closeMenu();
                 m_menuBack = nullptr;
             }
             run();
-            takeBackArm();
+            endBackArm();
         }
         return true;
     }
@@ -9878,9 +9895,15 @@ bool CardsActivity::handleTouch() {
         return true;
     }
 
-    // A tap.
+    // A tap. (Flow's covers overlap: the one in front, the nearest the middle, first.)
     if (m_touchOnCards) {
-        for (int i = 0; i < static_cast<int>(games().size()); ++i) {
+        std::vector<int> order(games().size());
+        for (size_t k = 0; k < order.size(); ++k) order[k] = static_cast<int>(k);
+        if (flowOn())
+            std::stable_sort(order.begin(), order.end(), [this](int a, int b) {
+                return std::abs(static_cast<float>(a) - m_scroll) < std::abs(static_cast<float>(b) - m_scroll);
+            });
+        for (int i : order) {
             nxui::Rect card;
             float t = 0.f;
             if (!cardRect(i, card, t) || !card.contains(x, y)) continue;
@@ -9913,7 +9936,7 @@ bool CardsActivity::handleTouch() {
         }
         return true;
     }
-    if (kPanel.contains(x, y)) { // the panel's buttons
+    if (kPanel.contains(x, y) && !wheelOn()) { // the panel's buttons (the wheel has none)
         const float by = kPanel.y + 108.f, cy = by + 38.5f, right = kPanel.x + kPanel.width - 22.f;
         int hit = -1;
         if (nxui::Rect{kPanel.x + 22.f, by, 262.f, 77.f}.contains(x, y)) hit = 0;
@@ -10989,7 +11012,8 @@ void CardsActivity::onUpdate(float dt) {
             if (gridOn()) {
                 gridPage(dir, false);
             } else {
-                const int to = std::clamp(sel() + dir * kCardsPerScreen, 0, static_cast<int>(games().size()) - 1);
+                const int jump = wheelOn() ? layout::wheel::kJump : kCardsPerScreen;
+                const int to = std::clamp(sel() + dir * jump, 0, static_cast<int>(games().size()) - 1);
                 if (to != sel()) select(to);
             }
         }
@@ -11075,7 +11099,7 @@ void CardsActivity::onUpdate(float dt) {
             gridPage(dir, false);
         } else if (!games().empty()) {
             const int n = static_cast<int>(games().size());
-            const int to = std::clamp(sel() + dir * kCardsPerScreen, 0, n - 1);
+            const int to = std::clamp(sel() + dir * (wheelOn() ? layout::wheel::kJump : kCardsPerScreen), 0, n - 1);
             if (to != sel()) {
                 m_zone = Zone::Cards;
                 select(to);
@@ -14338,7 +14362,7 @@ void CardsActivity::drawWheel(nxui::Renderer& r, bool rows) {
     const int lo = std::max(0, static_cast<int>(std::floor(m_scroll - layout::wheel::kShown)));
     const int hi = std::min(n - 1, static_cast<int>(std::ceil(m_scroll + layout::wheel::kShown)));
     for (int i = lo; i <= hi; ++i) {
-        if (launchDrawsCard() && i == m_leaveIndex) continue;
+        if (m_leaving && i == m_leaveIndex) continue; // (it launches from its cover: cardRect)
         nxui::Rect row;
         float t = 0.f;
         if (!cardRect(i, row, t)) continue;

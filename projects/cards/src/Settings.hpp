@@ -336,7 +336,9 @@ struct Settings {
         }
     }
 
+    mutable unsigned saves = 0; // how many times it was saved (a way back from before a change is dropped)
     void save() const {
+        ++saves;
         if (!readable) return; // (see readable)
         writeLater(kPath, text());
     }

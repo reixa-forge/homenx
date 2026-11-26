@@ -1019,7 +1019,10 @@ private:
     std::function<void()> m_backArmParent; // that list's own way back (a list that opens itself again keeps it)
     int m_backArmSel = 0;
     std::function<void()> m_pickBack, m_crossBack;
-    void armBackToList(); // m_backArm: the open list again, as it is now
+    void armBackToList(const MenuItem& row); // m_backArm: the open list again, as it is now (not for Back / Cancel rows)
+    void endBackArm();    // after a list row's run: a way back to a list from before a change is dropped
+    bool m_backClaimed = false; // a list took the list arm as its way back
+    unsigned m_backArmSaves = 0;
     void armBackToOptions(); // m_backArm: the + sheet again, at its level and button
     std::function<void()> takeBackArm() { m_backArmList = false; m_backArmParent = nullptr; return std::exchange(m_backArm, nullptr); }
     void reopenOptions(const Game& g, plus::Level level, int sel);
