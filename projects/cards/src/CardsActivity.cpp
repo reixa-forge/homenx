@@ -1513,6 +1513,7 @@ void CardsActivity::worker(int index) {
         done.id = job.game.id;
         done.what = job.what;
         done.gen = job.gen;
+        done.spare = job.spare;
         try {
         takeArtworkReadStats();
         const std::uint64_t jobStart = armGetSystemTick();
@@ -1675,8 +1676,11 @@ void CardsActivity::worker(int index) {
 // The grid's icons (160-ish, a few MB for a whole library) are let go last: they
 // went with their entry's background before, and the grid sat on spinners while
 // every new background pushed another page of icons out (74 a session).
-CardsActivity::Admit CardsActivity::reserveArtwork(std::uint64_t bytes, bool stock) {
+// spare: a picture read ahead goes only into free memory, never pushing one out, and
+// leaves a quarter free (else every picture wanted next waited on evictions, 0.1 s each).
+CardsActivity::Admit CardsActivity::reserveArtwork(std::uint64_t bytes, bool stock, bool spare) {
     auto used = [&]() { return app().gpu().imageMemoryUsed(); };
+    if (spare) return used() + bytes <= kArtworkBudget / 4 * 3 ? Admit::kYes : Admit::kNever;
     if (bytes <= kArtworkBudget && used() <= kArtworkBudget - bytes) return Admit::kYes;
     if (bytes > kArtworkBudget) return Admit::kNever;
     // One let go a moment ago: its memory frees after the frames in flight
@@ -1738,6 +1742,23 @@ void CardsActivity::wantArt() {
         jobs.push_back({page[(size_t)i], what, m_artGen});
     };
     const int s = sel();
+    // Read ahead (Job::spare): the page's others past `from` steps, nearest first, to the
+    // idle queue; they only go into free picture memory (none asked while it's full).
+    auto readAhead = [&](int what, int from) {
+        if (m_time < m_spareFullUntil) return;
+        const size_t before = jobs.size();
+        for (int d = from + 1; d < static_cast<int>(page.size()); ++d) {
+            add(s + d, what, false);
+            add(s - d, what, false);
+        }
+        if (jobs.size() == before) return;
+        std::lock_guard<std::mutex> lk(m_mu);
+        for (size_t j = before; j < jobs.size(); ++j) {
+            jobs[j].spare = true;
+            m_idleJobs.push_back(std::move(jobs[j]));
+        }
+        jobs.resize(before);
+    };
     add(s, kCard);
     add(s, kBackground);
     add(s, kIcon); // (a title picture can mean a search online: after the pictures you see)
@@ -1794,12 +1815,18 @@ void CardsActivity::wantArt() {
             for (size_t j = before; j < jobs.size(); ++j) m_idleJobs.push_back(std::move(jobs[j]));
             jobs.resize(before);
         }
+        if (channelsOn() && m_settings.channelArt == 0) // every page's channel pictures, as there's room
+            readAhead(kTile, 2 * m_gridPer);
     } else {
         // Backgrounds a little further ahead: the next ones swap in at once.
         for (int d = 2; d <= 3; ++d) {
             add(s + d, kBackground);
             add(s - d, kBackground);
         }
+        // The rest of the page's covers, read ahead while nothing else is wanted and
+        // as long as there's room: scrolling far then finds them here instead of
+        // their small copies and a wait (they go first when room is needed).
+        if (!m_settings.xmbView) readAhead(kCard, 12);
     }
     // Cancel queued requests outside the new working set. In-flight work owns
     // its data and completes safely; asked flags deduplicate it.
@@ -1937,7 +1964,7 @@ void CardsActivity::takeArt() {
         if (d.what == kTile && it->second.tile && it->second.tile->valid()) continue; // (the same: a tile never blinks)
         bool* asked = it->second.askedFor(d.what);
         // (A grid icon is kept wherever it is: the grid's pages show at once.)
-        if (d.what != kLaunch && d.what != kStock && d.id != selected && !(m_locked && d.id == m_lockGameId)) {
+        if (!d.spare && d.what != kLaunch && d.what != kStock && d.id != selected && !(m_locked && d.id == m_lockGameId)) {
             const auto& page = games();
             const auto found = std::find_if(page.begin(), page.end(), [&](const Game& g) { return g.id == d.id; });
             const int distance = found == page.end() ? 10000 : std::abs(static_cast<int>(found - page.begin()) - sel());
@@ -1962,7 +1989,12 @@ void CardsActivity::takeArt() {
 #else
         const std::uint64_t needed = static_cast<std::uint64_t>(d.w) * d.h * 4;
 #endif
-        const Admit admit = reserveArtwork(needed, d.what == kStock);
+        const Admit admit = reserveArtwork(needed, d.what == kStock, d.spare);
+        if (admit != Admit::kYes && d.spare) { // read ahead, and no room: it waits until it's near
+            if (asked) *asked = false;
+            m_spareFullUntil = m_time + 20.f;
+            continue;
+        }
         if (admit == Admit::kLater) { // room in a few frames: it and the rest wait for it (they were dropped,
             std::lock_guard<std::mutex> lk(m_mu); // and asked for again only on the 5 s retry)
             m_done.insert(m_done.begin(), std::make_move_iterator(&d), std::make_move_iterator(done.data() + done.size()));

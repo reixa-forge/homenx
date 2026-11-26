@@ -158,6 +158,7 @@ private:
         Game game;
         int what = kCard;
         int gen = 0; // m_artGen when asked (see forgetAllArt)
+        bool spare = false; // read ahead while nothing else is wanted: only into free picture memory
     };
     struct Done {
         std::uint64_t id = 0;
@@ -166,6 +167,7 @@ private:
         std::vector<std::uint8_t> rgba;
         int w = 0, h = 0;
         bool again = false; // an icon for now: its title picture is asked for again
+        bool spare = false; // (Job::spare)
         std::vector<std::uint8_t> small; // a cover's very small copy (m_thumbs)
         int sw = 0, sh = 0;
         int gen = 0;
@@ -181,7 +183,8 @@ private:
     // Room for a picture: kYes now; kLater when one was let go and its memory
     // frees a few frames on (the picture waits for it); kNever when nothing can go.
     enum class Admit { kYes, kLater, kNever };
-    Admit reserveArtwork(std::uint64_t bytes, bool stock = false);
+    Admit reserveArtwork(std::uint64_t bytes, bool stock = false, bool spare = false);
+    float m_spareFullUntil = 0.f; // a read-ahead picture found no room: none asked for until then
 
     // The queue is cleared (a page switch, a new order): what was asked and isn't
     // here yet is asked for again near the new selection.
