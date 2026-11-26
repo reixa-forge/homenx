@@ -223,15 +223,20 @@ private:
     bool morphing() const { return m_gridIn > 0.f && m_gridIn < 1.f; }
     int m_forceLayout = -1; // (cardRect: either layout's place, while they morph)
     // The row's other looks (Settings.rowStyle, HomeLayout.hpp): the same games,
-    // selection and scroll, laid out as a Deck (a handheld library) or a wheel; and the grid's
+    // selection and scroll, laid out as a wheel; and the grid's
     // Channels style. Y / Settings > Look > Home layout choose (setLayout).
-    bool deckOn() const { return !gridOn() && !m_settings.xmbView && m_settings.rowStyle == layout::kRowDeck; }
     bool wheelOn() const { return !gridOn() && !m_settings.xmbView && m_settings.rowStyle == layout::kRowWheel; }
     bool channelsOn() const { return gridOn() && m_settings.gridStyle == layout::kGridChannels; }
     float rowPitch() const; // touch: pixels dragged per card (the wheel: down, the rest: across)
+    // The wheel as Settings > Wheel has it (row size, which side).
+    float wheelScale() const { return layout::wheelSize(m_settings.wheelSize); }
+    layout::WheelSlot wheelAt(float rel) const { return layout::wheelSlot(rel, wheelScale(), m_settings.wheelLeft); }
+    nxui::Rect wheelCoverRect(float slide) const {
+        const layout::Box b = layout::wheelCover(m_settings.wheelLeft);
+        return {b.x + slide, b.y, b.w, b.h};
+    }
     void setLayout(layout::Layout to);
-    void drawDeckInfo(nxui::Renderer& r, float alpha); // Deck: the chosen game's name and details over the row
-    bool noPanel() const { return wheelOn() || deckOn(); } // (their names and details are drawn their own way)
+    bool noPanel() const { return wheelOn(); } // (its name and details are drawn its own way)
     void drawWheel(nxui::Renderer& r, bool rows); // false: the cover (under the glass); true: the rows (glass, over it)
     void toggleGrid();
     // The cross view (Y's third look): the pages side by side along the top,
@@ -278,6 +283,23 @@ private:
     void updateCrossInfo();
     void drawCrossInfo(nxui::Renderer& r);
     void editNote(const Game& game);
+    // Channels: A on a channel opens it (the Wii's channel screen): its picture
+    // large, a disc turning for a game, Back and Play; L / R the one before / after.
+    bool m_chanOpen = false;
+    float m_chanIn = 0.f;   // its zoom in (0 out, 1 in)
+    int m_chanSel = 1;      // 0 Back, 1 Play
+    float m_chanSwap = 1.f; // L / R: the new picture sliding in (1: there)
+    int m_chanDir = 0;      // from which side
+    float m_chanSpin = 0.f; // the disc's turn (0..1)
+    float m_chanAt = 0.f;   // when it was last drawn (its steps go by the time since)
+    bool channelScreenOn() const { return channelsOn() && m_settings.channelScreen && !m_moving; }
+    void openChannel();
+    void closeChannel();
+    void channelStep(int dir);
+    void channelStart();
+    void updateChannel();
+    bool channelTouch(float x, float y);
+    void drawChannel(nxui::Renderer& r);
     // The eShop's facts about each game (Library's GameInfo): the screen's copy,
     // and the new ones from worker 0 (under m_mu).
     std::map<std::uint64_t, GameInfo> m_infos, m_infosIn;

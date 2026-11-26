@@ -23,13 +23,16 @@ int main()
     }
     {
         Layout l = Layout::Cards;
-        const Layout order[] = {Layout::Deck, Layout::Wheel, Layout::Grid, Layout::Channels, Layout::Cross, Layout::Cards};
+        const Layout order[] = {Layout::Wheel, Layout::Grid, Layout::Channels, Layout::Cross, Layout::Cards};
         for (Layout want : order) assert((l = next(l)) == want);
         assert(next(Layout::Cards, -1) == Layout::Cross);
     }
     {
         Settings s; // old settings files: no rowStyle / gridStyle -> what they were
         assert(current(s) == Layout::Cards);
+        s.rowStyle = 1; // (looks since taken out) -> Cards
+        assert(current(s) == Layout::Cards);
+        s.rowStyle = 0;
         s.gridView = true;
         assert(current(s) == Layout::Grid);
         s.xmbView = true;
@@ -39,37 +42,12 @@ int main()
         t.gridLayout = 2;
         t.crossStyle = 1;
         apply(t, Layout::Channels);
-        apply(t, Layout::Deck);
+        apply(t, Layout::Wheel);
         assert(t.gridLayout == 2 && t.crossStyle == 1 && t.gridStyle == kGridChannels);
     }
-    assert(rowModel(Layout::Deck) && rowModel(Layout::Wheel) && !rowModel(Layout::Grid));
+    assert(rowModel(Layout::Cards) && rowModel(Layout::Wheel) && !rowModel(Layout::Grid));
     assert(gridModel(Layout::Channels) && !gridModel(Layout::Cross));
 
-    // Deck: the chosen capsule first, at the left edge, larger; the next ones
-    // to its right 20 px apart; the ones before it off to the left; all
-    // standing on the same bottom line; continuous as the row glides.
-    {
-        const DeckSlot c = deckSlot(0.f);
-        assert(c.shown && near(c.chosen, 1.f) && near(c.x, deck::kLeft));
-        assert(near(c.w, deck::kW * deck::kGrow) && near(c.h, deck::kH * deck::kGrow));
-        assert(near(c.y + c.h, deck::kBottom));
-        assert(c.y > deck::kInfoY + 10.f); // (the name and details above it)
-        DeckSlot prev = c;
-        for (int i = 1; i <= 6; ++i) {
-            const DeckSlot d = deckSlot(static_cast<float>(i));
-            assert(near(d.chosen, 0.f) && near(d.w, deck::kW) && near(d.y + d.h, deck::kBottom));
-            assert(near(d.x - (prev.x + prev.w), 20.f));
-            prev = d;
-        }
-        const DeckSlot before = deckSlot(-1.f);
-        assert(near(c.x - (before.x + before.w), 20.f));
-        assert(!deckSlot(-2.f).shown && !deckSlot(7.f).shown);
-        for (float x = -1.5f; x <= 6.f; x += 0.01f) {
-            const DeckSlot a = deckSlot(x), b = deckSlot(x + 0.01f);
-            assert(std::abs(a.x - b.x) < 4.f && std::abs(a.w - b.w) < 1.f);
-            if (a.shown) assert(a.y >= 0.f && a.y + a.h <= 720.f);
-        }
-    }
     // Wheel: the middle row is full size and opaque; rows get smaller and
     // fainter both ways, bend right, and step down by the pitch.
     {
@@ -91,6 +69,42 @@ int main()
         // The cover on the left stays clear of the rows, and on screen with its two lines under it.
         assert(wheel::kCoverX + wheel::kCoverW + 40.f < wheel::kX);
         assert(wheel::kCoverY > 90.f && wheel::kCoverY + wheel::kCoverH + 80.f < 720.f);
+    }
+    // Wheel, mirrored and sized: the left one is the right one's mirror image;
+    // sizes scale the rows and their spacing; the cover swaps sides with them.
+    for (int size = 0; size <= 2; ++size) {
+        const float k = wheelSize(size);
+        for (float rel = -4.f; rel <= 4.f; rel += 0.5f) {
+            const WheelSlot r = wheelSlot(rel, k), l = wheelSlot(rel, k, true);
+            assert(near(l.x, 1280.f - r.x - r.w) && near(l.y, r.y) && near(l.w, r.w));
+            if (r.shown) assert(r.x >= 0.f && r.x + r.w <= 1280.f && r.y >= 0.f && r.y + r.h <= 720.f);
+        }
+        const WheelSlot a = wheelSlot(0.f, k), b = wheelSlot(1.f, k);
+        assert(near((b.y + b.h * 0.5f) - (a.y + a.h * 0.5f), wheel::kPitch * k));
+        const Box cr = wheelCover(false), cl = wheelCover(true);
+        assert(cr.x + cr.w + 20.f < wheelSlot(0.f, k).x);                  // the cover clear of the rows
+        assert(cl.x > wheelSlot(0.f, k, true).x + wheelSlot(0.f, k, true).w + 20.f);
+    }
+    assert(wheelSize(0) < wheelSize(1) && wheelSize(1) < wheelSize(2) && near(wheelSize(1), 1.f));
+    // The channel screen: its parts inside the panel, the buttons side by side, the disc on the picture.
+    {
+        using namespace channel;
+        auto inside = [](const Box& in, const Box& out) {
+            return in.x >= out.x && in.y >= out.y && in.x + in.w <= out.x + out.w && in.y + in.h <= out.y + out.h;
+        };
+        assert(inside(kArt, kPanel) && inside(kBack, kPanel) && inside(kStart, kPanel));
+        assert(kBack.x + kBack.w < kStart.x && near(kBack.y, kStart.y));
+        assert(kArt.y + kArt.h < kBack.y);
+        assert(kDiscX - kDiscR >= kArt.x && kDiscX + kDiscR <= kArt.x + kArt.w && kDiscY + kDiscR <= kPanel.y + kPanel.h);
+        assert(near(kBack.x + kBack.w * 0.5f + kStart.x + kStart.w * 0.5f, 2.f * 640.f)); // centred
+        assert(inBox(kStart, kStart.x + 1.f, kStart.y + 1.f) && !inBox(kStart, kBack.x + 1.f, kBack.y + 1.f));
+    }
+    // Channels' big tiles fit too.
+    {
+        const GridCell c = channelCell(1);
+        assert(c.cols * c.w + (c.cols - 1) * c.padX < 1200.f && c.rows * c.h + (c.rows - 1) * c.padY < 482.f);
+        assert(near(c.w / c.h, 16.f / 9.f, 0.02f));
+        assert(channelCell(0).cols == 4 && channelCell(5).cols == 4);
     }
     // Channels: four wide tiles fit across with their gaps; the crop is 16:9 and centred.
     {

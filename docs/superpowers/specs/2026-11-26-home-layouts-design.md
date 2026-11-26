@@ -3,8 +3,9 @@
 Source: crimson, project thread 2026-11-26 ("research the most used and most loved
 menu types and add these menus to the options to switch between… things like 3D
 flow"), then the decision card: **Flow, Wheel, Channels**. After the first console
-test crimson dropped Flow ("flow isnt nice") for a **Deck** (Steam Deck style)
-layout: section 3 now describes Deck; Flow's notes are kept below for the record.
+test crimson dropped Flow ("flow isnt nice") for a Deck (Steam Deck style) layout, then
+dropped Deck too ("looks like cards just lower") and asked for a Wii-style channel screen
+and Settings tabs for the layouts: section 3 now describes those.
 
 ## 1. Research summary
 
@@ -28,39 +29,43 @@ glass, accent and fonts; no third-party art or names.
 
 `projects/cards/src/HomeLayout.hpp` (pure, host-tested):
 
-- `enum class Layout { Cards, Flow, Wheel, Grid, Channels, Cross }`.
+- `enum class Layout { Cards, Wheel, Grid, Channels, Cross }`.
 - Stored as today's flags plus two new ints, so old settings files keep working:
-  `Settings::rowStyle` (0 cards, 1 flow, 2 wheel; used when neither grid nor cross)
+  `Settings::rowStyle` (0 cards, 2 wheel; 1, the removed looks, reads as cards; used when neither grid nor cross)
   and `Settings::gridStyle` (0 icons, 1 channels; used when the grid is on).
 - `current(const Settings&)`, `apply(Settings&, Layout)`, `next(Layout)` (the Y cycle:
-  Cards → Flow → Wheel → Grid → Channels → Cross → Cards), `name(Layout)`.
-- Geometry, pure and tested: `flowSlot(rel)`, `wheelSlot(rel)`, `channelCell()`.
+  Cards → Wheel → Grid → Channels → Cross → Cards), `name(Layout)`.
+- Geometry, pure and tested: `wheelSlot(rel, size, left)`, `wheelCover(left)`, `channelCell(tiles)`,
+  the channel screen's boxes (`layout::channel`).
 
-Settings > Look gets one **Home layout** choice row (all six, left / right), and Y keeps
+Settings > Look gets one **Home layout** choice row (all five, left / right), and Y keeps
 cycling. The existing Grid view / Cross view toggles stay and agree with it.
 
-## 3. Deck (replaces Flow)
+## 3. The channel screen and the layouts' Settings tabs
 
-- A handheld-console library style: the chosen game's art is the screen's background
-  (as in every layout), a shade rises from the bottom, and the game's name (large)
-  and details (last played / author, play time) sit over a row of portrait capsules
-  along the bottom (176 x 250, 20 apart, standing on y 650).
-- The chosen capsule is the first in the row at x 80, 1.14x larger, with the ring; the
-  ones before it go off to the left (one shows, cut off). Pure geometry:
-  `deckSlot(rel)`; the capsules are flat, so the card row's drawing, glass apps,
-  badges, Rearrange, launches and touch all work unchanged through `cardRect`.
-- Same input as Cards; no bottom panel (Down does nothing).
+- Channels, A on a tile (or tapping the chosen one): a panel zooms out of the middle with
+  the game's picture large (background picture, else cover, else icon), its name on a
+  shade along the bottom, a silver disc turning over the picture's corner for a game
+  (light wedges and rim marks go round; nxui has no rotated textures, so the label stays
+  upright), and big Back and Play buttons. Left / Right choose, A presses, B back; L / R
+  (and side arrows / taps) the channel before / after with a slide, the grid page following.
+  + the options over it; it closes for Move, a launch, or a layout change.
+- Settings > Wheel: on / off, Side (rows right or left, mirrored), Row size (0.85 / 1 / 1.15:
+  scale and pitch; the fall-off goes by on-screen distance so all rows stay on screen).
+- Settings > Channels: on / off, Tiles (4 x 3 or 3 x 2), Channel screen, Spinning disc,
+  Every channel's name.
+- The scrolling light on the chosen card is masked to its rounded corners
+  (nxui `beginRoundedMask` / `endRoundedMask`, the existing SDF shape mask).
 
-(Flow, dropped: covers in 3D on trapezoids via an nxui perspective quad, with
-reflections. Removed along with that renderer addition.)
+(Deck and Flow, both dropped after console tests, are removed with their code.)
 
 ## 4. Wheel
 
-- Right half: the page's games on a gentle arc, one per 84 px, the chosen one in the
+- One side (Settings > Wheel > Side): the page's games on a gentle arc, one per 76 px, the chosen one in the
   middle at full size on glass with an accent ring; others smaller (down to 0.7) and
   fainter (down to 0.25) toward the ends; up to 4 above and 4 below. Each shows its
   title picture (logo) when there is one, else its name.
-- Left: the chosen game's cover, large, with its name under it. No bottom panel (A
+- The other side: the chosen game's cover, large, with its name under it (no shadow). No bottom panel (A
   plays, + opens the options as everywhere).
 - Up / down (and left / right) move along the wheel, repeating while held; up on the
   first game reaches the top bar; L / R jump a screen (8). Touch: drag up / down

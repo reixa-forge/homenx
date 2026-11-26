@@ -121,6 +121,16 @@ public:
     void drawTextureRounded(const Texture* tex, const Rect& dest, float radius, const Color& tint = Color::white());
     void drawTextureSubRounded(const Texture* tex, const Rect& src, const Rect& dest,
                                float radius, const Color& tint = Color::white());
+    // Plain shapes drawn between these (rects, triangles, lines) are cut to the
+    // rounded rect r (a sheen over a rounded card). Not for the rounded-shape
+    // calls (they set their own shape); not nested.
+#ifdef NXUI_BACKEND_DEKO3D
+    void beginRoundedMask(const Rect& r, float radius) { beginShape(r, radius); }
+    void endRoundedMask() { endShape(); }
+#else
+    void beginRoundedMask(const Rect&, float) {} // (SDL2: the clip rect only)
+    void endRoundedMask() {}
+#endif
     void drawText(const std::string& text, const Vec2& pos, Font* font, const Color& color, float scale = 1.f);
 
     /// GPU→CPU readback of the last presented framebuffer. See GpuDevice.

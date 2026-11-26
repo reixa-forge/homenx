@@ -1122,7 +1122,7 @@ void CardsActivity::applyGridLayout() {
     const L& l = kLayouts[std::clamp(m_settings.gridLayout, 0, 3)];
     // Channels: its own wide tiles, whatever the grid's size says.
     const layout::GridCell c = m_settings.gridStyle == layout::kGridChannels
-                                   ? layout::kChannelCell
+                                   ? layout::channelCell(m_settings.channelTiles)
                                    : layout::GridCell{l.cols, l.rows, l.cell, l.cell, l.padX, l.padY};
     m_gridCols = c.cols;
     m_gridRows = c.rows;
@@ -3759,8 +3759,10 @@ void CardsActivity::pumpDaemon() {
 // Everything open closes; true if something was.
 bool CardsActivity::closeEverything() {
     bool any = !m_menu.empty() || m_notifOpen || m_sheetOpen || m_moving || m_quickOpen || m_powerOpen || m_dotsOpen
-            || m_optOpen || m_pickOpen || m_musicOpen || m_spQrOpen || m_task != Task::None;
+            || m_optOpen || m_pickOpen || m_musicOpen || m_spQrOpen || m_chanOpen || m_task != Task::None;
     closeTask();
+    m_chanOpen = false;
+    m_chanIn = 0.f;
     if (m_spQrOpen) {
         m_spQrOpen = false;
 #ifdef SWITCHU_MENU
@@ -5871,12 +5873,8 @@ nxui::Vec2 CardsActivity::slotPos(int index) const {
         return {r.x, r.y};
     }
     const float rel = static_cast<float>(index) - m_scroll;
-    if (deckOn()) {
-        const layout::DeckSlot d = layout::deckSlot(rel);
-        return {d.x, d.y};
-    }
     if (wheelOn()) {
-        const layout::WheelSlot w = layout::wheelSlot(rel);
+        const layout::WheelSlot w = wheelAt(rel);
         return {w.x, w.y};
     }
     return {kCardFirstX + rel * kCardPitch, 0.f};
@@ -7380,7 +7378,7 @@ void CardsActivity::buildSettings() {
     Section look{"Look", "gear", {}};
     look.rows.push_back(choice("Home layout", [this]() { return std::string(layout::name(layout::current(m_settings))); },
         [this](int d) { setLayout(layout::next(layout::current(m_settings), d)); },
-        "Cards, Deck (a handheld library), Wheel, Grid, Channels or the cross view. Y on HOME changes it too"));
+        "Cards, Wheel, Grid, Channels or the cross view. Y on HOME changes it too"));
     look.rows.push_back(choice("Highlight colour",
         [this]() { return std::string(kAccents[std::clamp(m_settings.accent, 0, kAccentCount - 1)].name); },
         [this, save](int d) {
@@ -7512,14 +7510,10 @@ void CardsActivity::buildSettings() {
 
     // The grid (SwitchU's Wii U grid of icons): its own tab too.
     Section gridTab{"Grid view", "copy", {}};
-    gridTab.rows.push_back(toggle("Grid view", [this]() { return m_settings.gridView && !m_settings.xmbView; },
+    gridTab.rows.push_back(toggle("Grid view", [this]() { return layout::current(m_settings) == layout::Layout::Grid; },
         [this]() {
-            if (m_settings.xmbView) {
-                setCrossView(false);
-                if (!m_settings.gridView) toggleGrid();
-            } else {
-                toggleGrid();
-            }
+            const bool on = layout::current(m_settings) == layout::Layout::Grid;
+            setLayout(on ? layout::Layout::Cards : layout::Layout::Grid);
         }, "SwitchU's Wii U grid of icons instead of the cards (Y; hold Y to move a game)"));
     gridTab.rows.push_back(choice("Layout", [this]() {
         static const char* const names[] = {"5 x 3 (SwitchU)", "4 x 3", "4 x 2, big icons", "6 x 4, small icons"};
@@ -7538,6 +7532,54 @@ void CardsActivity::buildSettings() {
         [this, save]() { m_settings.gridStars = !m_settings.gridStars; save(); }, "A star on your favourites' icons"));
     gridTab.rows.push_back(info("Icons", []() { return tr("+ > Appearance… > Icon picture"); }));
     m_sheet.push_back(std::move(gridTab));
+
+    // Wheel and Channels: a tab each, as the grid and the cross view have.
+    Section wheelTab{"Wheel", "playlist", {}};
+    wheelTab.rows.push_back(toggle("Wheel", [this]() { return layout::current(m_settings) == layout::Layout::Wheel; },
+        [this]() {
+            const bool on = layout::current(m_settings) == layout::Layout::Wheel;
+            setLayout(on ? layout::Layout::Cards : layout::Layout::Wheel);
+        }, "Your games in a list down the side, the chosen one's cover large beside it"));
+    wheelTab.rows.push_back(choice("Side", [this]() { return std::string(m_settings.wheelLeft ? "Left" : "Right"); },
+        [this, save](int) {
+            m_settings.wheelLeft = !m_settings.wheelLeft;
+            m_pageDir = 0;
+            m_pageIn = m_settings.motion ? 0.f : 1.f; // (it fades in on its new side)
+            save();
+        }, "Which side the list goes; the cover takes the other"));
+    wheelTab.rows.push_back(choice("Row size", [this]() {
+        static const char* const names[] = {"Small", "Medium", "Large"};
+        return std::string(names[std::clamp(m_settings.wheelSize, 0, 2)]);
+    }, [this, save](int d) {
+        m_settings.wheelSize = (m_settings.wheelSize + d + 3) % 3;
+        m_pageDir = 0;
+        m_pageIn = m_settings.motion ? 0.f : 1.f;
+        save();
+    }, "Smaller rows show more games at once"));
+    m_sheet.push_back(std::move(wheelTab));
+
+    Section channelTab{"Channels", "news", {}};
+    channelTab.rows.push_back(toggle("Channels", [this]() { return layout::current(m_settings) == layout::Layout::Channels; },
+        [this]() {
+            const bool on = layout::current(m_settings) == layout::Layout::Channels;
+            setLayout(on ? layout::Layout::Cards : layout::Layout::Channels);
+        }, "Wide rounded tiles, a page of them at a time"));
+    channelTab.rows.push_back(choice("Tiles", [this]() {
+        return std::string(m_settings.channelTiles == 1 ? "3 x 2, bigger" : "4 x 3");
+    }, [this, save](int) {
+        m_settings.channelTiles = 1 - m_settings.channelTiles;
+        if (channelsOn()) applyGridLayout();
+        wantArt();
+        save();
+    }, "How many channels on each page"));
+    channelTab.rows.push_back(toggle("Channel screen", [this]() { return m_settings.channelScreen; },
+        [this, save]() { m_settings.channelScreen = !m_settings.channelScreen; save(); },
+        "On: A opens the channel (its picture large, Play and Back; L / R the next one). Off: A starts it"));
+    channelTab.rows.push_back(toggle("Spinning disc", [this]() { return m_settings.channelDisc; },
+        [this, save]() { m_settings.channelDisc = !m_settings.channelDisc; save(); }, "On the channel screen, for games"));
+    channelTab.rows.push_back(toggle("Every channel's name", [this]() { return m_settings.channelNames; },
+        [this, save]() { m_settings.channelNames = !m_settings.channelNames; save(); }, "Off: only the chosen one's"));
+    m_sheet.push_back(std::move(channelTab));
 
     // The lock screen: its own tab (HomeNX's lock screen shares the password and the picture).
     Section lockTab{"Lock screen", "moon", {}};
@@ -9803,6 +9845,7 @@ bool CardsActivity::handleTouch() {
         }
         return true;
     }
+    if (m_chanOpen) return channelTouch(x, y);
     if (m_settings.xmbView && y >= 95.f) return crossTouch(x, y); // (the bar: as always, below)
     if (in.touchDown()) {
         m_touchOnCards = y > 100.f && y < (gridOn() || noPanel() ? 690.f : 490.f);
@@ -9905,7 +9948,9 @@ bool CardsActivity::handleTouch() {
             float t = 0.f;
             if (!cardRect(i, card, t) || !card.contains(x, y)) continue;
             m_zone = Zone::Cards;
-            if (i == sel()) {
+            if (i == sel() && channelScreenOn()) {
+                openChannel();
+            } else if (i == sel()) {
                 press(1, i);
                 play();
             } else {
@@ -9933,7 +9978,7 @@ bool CardsActivity::handleTouch() {
         }
         return true;
     }
-    if (kPanel.contains(x, y) && !noPanel()) { // the panel's buttons (the wheel and the deck have none)
+    if (kPanel.contains(x, y) && !noPanel()) { // the panel's buttons (the wheel has none)
         const float by = kPanel.y + 108.f, cy = by + 38.5f, right = kPanel.x + kPanel.width - 22.f;
         int hit = -1;
         if (nxui::Rect{kPanel.x + 22.f, by, 262.f, 77.f}.contains(x, y)) hit = 0;
@@ -10950,6 +10995,10 @@ void CardsActivity::onUpdate(float dt) {
         updateCrossInfo();
         return;
     }
+    if (m_chanOpen) {
+        updateChannel();
+        return;
+    }
     if (m_settings.xmbView && !m_moving && m_zone != Zone::Top && updateCross(dt)) return;
 
     // Left / right: repeating while held.
@@ -11070,11 +11119,13 @@ void CardsActivity::onUpdate(float dt) {
     }
     if (gridDown && m_zone != Zone::Bottom && !((gridOn() || noPanel()) && m_zone == Zone::Cards)) {
         m_zone = m_zone == Zone::Top ? Zone::Cards : Zone::Bottom;
-        if ((gridOn() || noPanel()) && m_zone == Zone::Bottom) m_zone = Zone::Cards; // no panel in the grid, the wheel or the deck
+        if ((gridOn() || noPanel()) && m_zone == Zone::Bottom) m_zone = Zone::Cards; // no panel in the grid or the wheel
         m_audio.play("navigation");
     }
     if (aDown) {
-        if (m_zone == Zone::Cards) {
+        if (m_zone == Zone::Cards && channelScreenOn()) {
+            openChannel();
+        } else if (m_zone == Zone::Cards) {
             press(1, sel());
             play();
         } else if (m_zone == Zone::Top) {
@@ -11286,7 +11337,7 @@ void CardsActivity::draw(nxui::Renderer& r) {
     drawStep("draw: the cards' extras");
     if (m_settings.xmbView) drawCross(r); // (after the blurred copy: its glass shows the art behind)
     else drawCardExtras(r);
-    drawCrossInfo(r); // the details panel (+ > Details; + in the cross view), in any view
+    if (m_chanIn <= 0.f && !m_chanOpen) drawCrossInfo(r); // the details panel (+ > Details; + in the cross view), in any view
     drawStep("draw: the bar and the panel");
     // Launching: the bar and the panel go first.
     const int leaveStyle = launchStyle();
@@ -11307,6 +11358,10 @@ void CardsActivity::draw(nxui::Renderer& r) {
         frost(r, pill, 20.f, nxui::Color(0.06f, 0.07f, 0.10f, 0.7f));
         r.drawRoundedRectOutline(pill, accent(0.6f), 20.f, 1.5f);
         textMid(r, m_fBody, hint, pill.x + 22.f, pill.y + 20.f, kWhite);
+    }
+    if (m_chanOpen || m_chanIn > 0.f) { // a channel open: over the bar and the rest (the details, + > Details: over it)
+        drawChannel(r);
+        drawCrossInfo(r);
     }
     drawStep("draw: the menus");
     drawSheet(r);
@@ -11649,14 +11704,13 @@ bool CardsActivity::cardRect(int index, nxui::Rect& card, float& chosen) {
 // On the row's screen (as the row lays it out now, whichever layout is shown).
 bool CardsActivity::rowShows(int index) const {
     const float rel = static_cast<float>(index) - m_scroll;
-    if (deckOn()) return layout::deckSlot(rel).shown;
-    if (wheelOn()) return layout::wheelSlot(rel).shown;
+    if (wheelOn()) return wheelAt(rel).shown;
     const float x0 = kCardFirstX + rel * kCardPitch;
     return x0 < 1290.f && x0 + kCardPitch > -10.f;
 }
 
 float CardsActivity::rowPitch() const {
-    return deckOn() ? layout::deck::kPitch : wheelOn() ? layout::wheel::kPitch : kCardPitch;
+    return wheelOn() ? layout::wheel::kPitch * wheelScale() : kCardPitch;
 }
 
 bool CardsActivity::cardRectAt(int index, nxui::Rect& card, float& chosen) {
@@ -11688,28 +11742,22 @@ bool CardsActivity::cardRectAt(int index, nxui::Rect& card, float& chosen) {
         }
         return true;
     }
-    if (deckOn() || wheelOn()) {
-        // Deck: each capsule; Wheel: each row.
+    if (wheelOn()) {
+        // Each row.
         // Launching from the wheel, the chosen one starts from its big cover.
         const float k = std::max(0.f, rel + 1.f);
         const float rise = 1.f - easeOut((m_intro - 0.1f - 0.07f * k) / 0.5f);
-        if (deckOn()) {
-            const layout::DeckSlot d = layout::deckSlot(rel);
-            if (!d.shown) return false;
-            card = {d.x + slide, d.y + 60.f * rise, d.w, d.h};
-        } else if (m_leaving && index == m_leaveIndex) {
-            using namespace layout::wheel;
-            card = {kCoverX + slide, kCoverY, kCoverW, kCoverH};
+        if (m_leaving && index == m_leaveIndex) {
+            card = wheelCoverRect(slide);
         } else {
-            const layout::WheelSlot w = layout::wheelSlot(rel);
+            const layout::WheelSlot w = wheelAt(rel);
             if (!w.shown) return false;
             card = {w.x + slide, w.y + 60.f * rise, w.w, w.h};
         }
         chosen = clamp01(1.f - std::abs(rel));
         if (m_moving && index == sel()) { // picked up
             card = scaled(card, 1.05f);
-            if (deckOn()) card.y -= 22.f + 3.f * std::sin(m_decoTime * 6.f);
-            else card.x -= 22.f + 3.f * std::sin(m_decoTime * 6.f);
+            card.x += (m_settings.wheelLeft ? 1.f : -1.f) * (22.f + 3.f * std::sin(m_decoTime * 6.f)); // (toward the middle)
         }
     } else {
         const float x0 = kCardFirstX + rel * kCardPitch + slide;
@@ -12068,6 +12116,221 @@ void CardsActivity::editNote(const Game& game) {
                 else m_settings.notes[key] = text.substr(first, text.find_last_not_of(" \t\r\n") - first + 1);
                 m_settings.save();
             });
+}
+
+// ---------------------------------------------------------------- a channel (Channels: A)
+
+void CardsActivity::openChannel() {
+    if (!current() || m_leaving) return;
+    m_chanOpen = true;
+    m_chanSel = 1; // (Play, as the Wii's Start)
+    m_chanSwap = 1.f;
+    m_chanDir = 0;
+    m_chanAt = m_time; // (it zooms in from now, not by the time since it was last open)
+    if (!m_settings.motion) m_chanIn = 1.f;
+    m_audio.play("show_modal");
+    wantArt();
+}
+
+void CardsActivity::closeChannel() {
+    if (!m_chanOpen) return;
+    m_chanOpen = false;
+    if (!m_settings.motion) m_chanIn = 0.f;
+    m_audio.play("hide_modal");
+}
+
+// L / R: the channel before or after, the grid's page following under it.
+void CardsActivity::channelStep(int dir) {
+    const int n = static_cast<int>(games().size());
+    const int to = std::clamp(sel() + dir, 0, n - 1);
+    if (n == 0 || to == sel()) return;
+    select(to); // (its sound, its background asked for)
+    if (gridOn() && m_gridPer > 0) gridSlideTo(to / m_gridPer);
+    m_chanDir = dir;
+    m_chanSwap = m_settings.motion ? 0.f : 1.f;
+    wantArt();
+}
+
+void CardsActivity::channelStart() {
+    m_chanOpen = false; // (it zooms away as the game starts from its tile)
+    m_audio.play("activation");
+    press(1, sel());
+    play();
+}
+
+// Left / right choose Back or Start, A presses it; B goes back; L / R (ZL / ZR)
+// the channel before or after; + the game's options over it; X closes the open game.
+void CardsActivity::updateChannel() {
+    auto& in = app().input();
+    using B = nxui::Button;
+    if (!channelsOn() || !current() || m_moving || m_leaving) { // (+ > Move, Play...: it gives way)
+        m_chanOpen = false;
+        return;
+    }
+    if (in.isDown(B::B)) {
+        closeChannel();
+        return;
+    }
+    if (in.isDown(B::Plus)) {
+        openOptions(); // (they close back to the channel)
+        return;
+    }
+    const bool left = in.isDown(B::DLeft) || in.isDown(B::LStickL) || in.isDown(B::RStickL);
+    const bool right = in.isDown(B::DRight) || in.isDown(B::LStickR) || in.isDown(B::RStickR);
+    if ((left && m_chanSel != 0) || (right && m_chanSel != 1)) {
+        m_chanSel = left ? 0 : 1;
+        m_audio.play("navigation");
+    }
+    if (in.isDown(B::L) || in.isDown(B::ZL)) channelStep(-1);
+    else if (in.isDown(B::R) || in.isDown(B::ZR)) channelStep(1);
+    if (in.isDown(B::A)) {
+        if (m_chanSel == 1) channelStart();
+        else closeChannel();
+        return;
+    }
+    if (in.isDown(B::X)) askClose();
+}
+
+// Touch: Back, Start, the arrows at the sides; outside the panel: back.
+bool CardsActivity::channelTouch(float x, float y) {
+    auto& in = app().input();
+    if (!in.touchUp()) return in.isTouching();
+    using namespace layout::channel;
+    const int n = static_cast<int>(games().size());
+    if (layout::inBox(kStart, x, y)) {
+        m_chanSel = 1;
+        channelStart();
+    } else if (layout::inBox(kBack, x, y)) {
+        m_chanSel = 0;
+        closeChannel();
+    } else if (x < layout::channel::kPanel.x && sel() > 0) {
+        channelStep(-1);
+    } else if (x >= layout::channel::kPanel.x + layout::channel::kPanel.w && sel() < n - 1) {
+        channelStep(1);
+    } else if (!layout::inBox(layout::channel::kPanel, x, y)) {
+        closeChannel();
+    }
+    return true;
+}
+
+void CardsActivity::drawChannel(nxui::Renderer& r) {
+    const float dt = std::clamp(m_time - m_chanAt, 0.f, 0.1f);
+    m_chanAt = m_time;
+    if (m_chanOpen && (!channelsOn() || m_moving || m_leaving)) m_chanOpen = false;
+    m_chanIn += ((m_chanOpen ? 1.f : 0.f) - m_chanIn) * (m_settings.motion ? std::min(1.f, dt * 11.f) : 1.f);
+    if (!m_chanOpen && m_chanIn < 0.01f) m_chanIn = 0.f;
+    m_chanSwap = std::min(1.f, m_chanSwap + dt / layout::channel::kSwapSec);
+    m_chanSpin = std::fmod(m_chanSpin + dt * layout::channel::kTurnsPerSecond, 1.f);
+    if (m_chanIn <= 0.001f) return;
+    const Game* gp = current();
+    if (!gp) return;
+    const Game& g = *gp;
+    using namespace layout::channel;
+    const float e = easeOut(m_chanIn), a = e;
+    // It grows out of the middle of the screen (as the Wii's zooms out of its tile).
+    const float k = 0.9f + 0.1f * e;
+    auto at = [k](const layout::Box& b) {
+        return nxui::Rect{640.f + (b.x - 640.f) * k, 360.f + (b.y - 360.f) * k, b.w * k, b.h * k};
+    };
+    r.drawRect({0.f, 0.f, 1280.f, 720.f}, nxui::Color(0.f, 0.f, 0.f, 0.55f * a));
+    const nxui::Rect panel = at(layout::channel::kPanel);
+    const float pr = 30.f * k;
+    frost(r, panel, pr, nxui::Color(0.06f, 0.07f, 0.10f, 0.88f * a));
+    r.drawRoundedRectOutline(panel, nxui::Color(1.f, 1.f, 1.f, 0.18f * a), pr, 2.f);
+
+    // The picture: the game's background picture, else its cover, else its icon,
+    // filling the frame; L / R slide the next one in from its side.
+    const nxui::Rect frame = at(kArt);
+    const float fr = 22.f * k;
+    auto it = m_art.find(g.id);
+    const Art* art = it != m_art.end() ? &it->second : nullptr;
+    const auto th = m_thumbs.find(g.id);
+    const nxui::Texture* pic = art && art->bg && art->bg->valid() && art->bgKind != ArtKind::Icon ? art->bg.get()
+                             : art && art->card && art->card->valid() && art->kind != ArtKind::Icon ? art->card.get()
+                             : th != m_thumbs.end() && th->second.tex && th->second.tex->valid() ? th->second.tex.get()
+                             : art && art->stock && art->stock->valid() ? art->stock.get()
+                             : art && art->icon && art->icon->valid() ? art->icon.get() : nullptr;
+    const float swap = easeOut(m_chanSwap);
+    r.drawRoundedRect(frame, nxui::Color(0.02f, 0.03f, 0.05f, 0.9f * a), fr);
+    r.pushClipRect(frame);
+    const nxui::Rect face{frame.x + (1.f - swap) * 90.f * static_cast<float>(m_chanDir), frame.y, frame.width, frame.height};
+    if (pic) drawCover(r, pic, face, fr, kWhite.withAlpha(a * swap));
+    else {
+        const std::string name = fit(m_fTitle, g.name, frame.width - 80.f);
+        textMid(r, m_fTitle, name, face.x + (face.width - measured(m_fTitle, name).x) * 0.5f, face.y + face.height * 0.5f,
+                kMuted.withAlpha(a * swap));
+    }
+    r.popClipRect();
+    r.drawRoundedRectOutline(frame, nxui::Color(1.f, 1.f, 1.f, 0.30f * a), fr, 2.f);
+    { // its name on a shade along the picture's bottom
+        const float sh = 74.f * k;
+        const nxui::Rect strip{frame.x, frame.y + frame.height - sh, frame.width, sh};
+        r.beginRoundedMask(frame, fr);
+        r.drawGradientRect(strip, nxui::Color(0.f, 0.f, 0.f, 0.f), nxui::Color(0.f, 0.f, 0.f, 0.62f * a));
+        r.endRoundedMask();
+        const float room = frame.width - 64.f - (m_settings.channelDisc && g.action.empty() ? 2.f * kDiscR * k + 40.f : 0.f);
+        const std::string name = fit(m_fLabel, g.name, room);
+        textMid(r, m_fLabel, name, frame.x + 32.f * k, strip.y + sh * 0.58f, kWhite.withAlpha(a * swap));
+    }
+
+    // A game's disc, turning: silver, its label the game's icon, the light
+    // going round on it (and a mark at the rim, so the turn shows).
+    if (m_settings.channelDisc && g.action.empty()) {
+        const nxui::Vec2 c{640.f + (kDiscX - 640.f) * k, 360.f + (kDiscY - 360.f) * k};
+        const float R = kDiscR * k * (0.7f + 0.3f * e);
+        r.drawCircle({c.x + 3.f, c.y + 7.f}, R + 2.f, nxui::Color(0.f, 0.f, 0.f, 0.35f * a), 64);
+        r.drawCircle(c, R, nxui::Color(0.80f, 0.83f, 0.88f, a), 64);
+        r.drawCircle(c, R * 0.96f, nxui::Color(0.90f, 0.92f, 0.95f, a), 64);
+        const float turn = m_chanSpin * 6.2831853f;
+        for (int w = 0; w < 2; ++w) { // two wedges of light, opposite each other
+            const float a0 = turn + 3.14159265f * static_cast<float>(w);
+            constexpr int kSteps = 6;
+            for (int s = 0; s < kSteps; ++s) {
+                const float t0 = a0 + 0.12f * static_cast<float>(s), t1 = t0 + 0.12f;
+                const float fade = 1.f - static_cast<float>(s) / kSteps;
+                r.drawTriangle(c, {c.x + std::cos(t0) * R * 0.95f, c.y + std::sin(t0) * R * 0.95f},
+                               {c.x + std::cos(t1) * R * 0.95f, c.y + std::sin(t1) * R * 0.95f},
+                               nxui::Color(1.f, 1.f, 1.f, 0.42f * fade * a));
+            }
+        }
+        const float lr = R * 0.62f; // the label
+        const nxui::Texture* label = art && art->stock && art->stock->valid() ? art->stock.get()
+                                   : art && art->icon && art->icon->valid() ? art->icon.get() : nullptr;
+        if (label) r.drawTextureRounded(label, {c.x - lr, c.y - lr, 2.f * lr, 2.f * lr}, lr, kWhite.withAlpha(a));
+        else r.drawCircle(c, lr, accent(0.85f * a), 48);
+        for (int d = 0; d < 3; ++d) { // marks on the label's rim, turning with it
+            const float t = turn + 2.0943951f * static_cast<float>(d);
+            r.drawCircle({c.x + std::cos(t) * lr * 0.82f, c.y + std::sin(t) * lr * 0.82f}, 4.f * k,
+                         nxui::Color(1.f, 1.f, 1.f, 0.7f * a), 12);
+        }
+        r.drawCircle(c, R * 0.17f, nxui::Color(0.72f, 0.75f, 0.80f, a), 32); // the hub
+        r.drawCircle(c, R * 0.09f, nxui::Color(0.05f, 0.06f, 0.09f, a), 24); // the hole
+    }
+
+    // Back and Start, big, the chosen one lit.
+    const std::string startWord = isRunning(g.id) ? "Resume" : g.action == "get" ? "Get" : "Play";
+    const struct { layout::Box box; const char* word; int index; } buttons[] = {{kBack, "Back", 0}, {kStart, startWord.c_str(), 1}};
+    for (const auto& b : buttons) {
+        const nxui::Rect rect = at(b.box);
+        const bool chosen = m_chanSel == b.index;
+        const float rad = rect.height * 0.5f;
+        frost(r, rect, rad, chosen ? accent(0.92f * a) : glassTint(1.4f * a));
+        r.drawRoundedRectOutline(rect, chosen ? nxui::Color(1.f, 1.f, 1.f, 0.85f * a) : nxui::Color(1.f, 1.f, 1.f, 0.22f * a),
+                                 rad, chosen ? 3.f : 1.5f);
+        if (chosen) {
+            const float ring = 0.5f + 0.5f * std::sin(m_decoTime * 4.f);
+            r.drawRoundedRectOutline(scaled(rect, 1.f + 0.04f * ring), accent(0.45f * (1.f - ring) * a), rad * 1.04f, 2.f);
+        }
+        const std::string word = fit(m_fPlay, b.word, rect.width - 40.f);
+        textMid(r, m_fPlay, word, rect.x + (rect.width - measured(m_fPlay, word).x) * 0.5f, rect.y + rect.height * 0.5f,
+                kWhite.withAlpha(a));
+    }
+
+    // The arrows beside it: L / R, or a tap, for the channel before / after.
+    const int n = static_cast<int>(games().size());
+    const float ay = frame.y + frame.height * 0.5f;
+    if (sel() > 0) glassCircle(r, panel.x * 0.5f, ay, 52.f, false, "prev", 24.f, a, 0.f);
+    if (sel() < n - 1) glassCircle(r, 1280.f - panel.x * 0.5f, ay, 52.f, false, "next", 24.f, a, 0.f);
 }
 
 void CardsActivity::drawCrossInfo(nxui::Renderer& r) {
@@ -13055,7 +13318,7 @@ void CardsActivity::checkGameMusic() {
     }
 }
 
-// Y: Cards, Deck, Wheel, Grid, Channels, the cross view, and round again.
+// Y: Cards, Wheel, Grid, Channels, the cross view, and round again.
 void CardsActivity::cycleView() {
     const layout::Layout to = layout::next(layout::current(m_settings));
     setLayout(to);
@@ -13961,14 +14224,16 @@ void CardsActivity::drawGrid(nxui::Renderer& r) {
                 const float in = easeOut((m_time - art->bgIn) / 0.35f) * focus;
                 if (in > 0.01f) drawCover(r, art->bg.get(), face, rad - 3.f, kWhite.withAlpha(a * in));
             }
-            if (focus > 0.01f) { // its name, on a dark strip along the bottom
+            // Its name, on a dark strip along the bottom: the chosen one's (Settings > Channels: every one's).
+            const float named = std::max(focus, m_settings.channelNames ? 1.f : 0.f);
+            if (named > 0.01f) {
                 const float sh = 34.f * sc;
                 const nxui::Rect strip{face.x, face.y + face.height - sh, face.width, sh};
                 r.pushClipRect(strip);
-                r.drawRoundedRect(face, nxui::Color(0.02f, 0.03f, 0.05f, 0.62f * a * focus), rad - 3.f);
+                r.drawRoundedRect(face, nxui::Color(0.02f, 0.03f, 0.05f, 0.62f * a * named), rad - 3.f);
                 r.popClipRect();
-                const std::string name = fit(m_fBody, g.name, strip.width - 24.f);
-                textMid(r, m_fBody, name, strip.x + 12.f, strip.y + sh * 0.5f, kWhite.withAlpha(a * focus));
+                const std::string name = fit(m_fBody, g.name, strip.width - 24.f, std::min(1.f, sc));
+                textMid(r, m_fBody, name, strip.x + 12.f, strip.y + sh * 0.5f, kWhite.withAlpha(a * named), std::min(1.f, sc));
             }
         } else {
             r.drawRoundedRect({tile.x + 1.f, tile.y + 6.f, tile.width, tile.height},
@@ -14142,10 +14407,9 @@ void CardsActivity::drawCards(nxui::Renderer& r) {
     const float making = othersAlpha() * rowIn; // launching: the others fade (and the grid coming: all of them)
     if (m_page >= kPageCount) { // a page of your own: its name over the cards
         const std::string name = fit(m_fBody, pageName(m_page), 640.f);
-        const float nx = wheelOn() ? layout::wheel::kX + 4.f : deckOn() ? layout::deck::kLeft + 4.f : kCardFirstX + 4.f;
+        const float nx = wheelOn() ? wheelAt(0.f).x + 4.f : kCardFirstX + 4.f;
         textMid(r, m_fBody, name, nx, 100.f, kMuted.withAlpha(0.95f * pageAlpha * making), 0.9f);
     }
-    if (deckOn()) drawDeckInfo(r, pageAlpha * making); // (then its capsules: the cards, placed by cardRect)
     if (!morphing()) { // (morphing with the grid: flat cards, below, from cardRect)
         if (wheelOn()) {
             drawWheel(r, false);
@@ -14214,25 +14478,6 @@ void CardsActivity::drawCards(nxui::Renderer& r) {
     }
 }
 
-// Deck (Settings.rowStyle 1): the chosen game's art is the screen's background
-// (as everywhere); a shade rises from the bottom so the row and the words read
-// over it, and the game's name and details sit over the row.
-void CardsActivity::drawDeckInfo(nxui::Renderer& r, float alpha) {
-    if (alpha <= 0.01f) return;
-    r.drawGradientRect({0.f, 200.f, 1280.f, 520.f}, nxui::Color(0.f, 0.f, 0.f, 0.f), nxui::Color(0.f, 0.f, 0.f, 0.72f * alpha));
-    const Game* g = current();
-    if (!g || m_moving) return;
-    const float a = alpha * easeOut(m_detailIn);
-    using namespace layout::deck;
-    const std::string name = fit(m_fTitle, g->name, 1280.f - 2.f * kLeft, 1.35f);
-    textMid(r, m_fTitle, name, kLeft, kTitleY, kWhite.withAlpha(a), 1.35f);
-    std::string about = !g->action.empty() ? g->author
-                      : g->path.empty() ? lastPlayed(g->lastPlayed)
-                      : !g->author.empty() ? g->author : tr("Homebrew");
-    if (g->action.empty() && g->path.empty() && g->playSeconds > 0) about += "   ·   " + playTime(g->playSeconds);
-    textMid(r, m_fBody, fit(m_fBody, about, 1280.f - 2.f * kLeft), kLeft, kInfoY, kMuted.withAlpha(a));
-}
-
 // Wheel (Settings.rowStyle 2): the chosen game's cover large on the left with
 // its name, and the page's games as glass rows on an arc down the right, the
 // chosen one in the middle. The cover goes under the screen's blurred copy;
@@ -14247,13 +14492,12 @@ void CardsActivity::drawWheel(nxui::Renderer& r, bool rows) {
     const float slide = (1.f - easeOut(m_pageIn)) * 160.f * static_cast<float>(m_pageDir);
     if (!rows) {
         if (launchDrawsCard() && s == m_leaveIndex) return; // (drawLaunch has it)
-        using namespace layout::wheel;
         const Game& g = page[(size_t)s];
         const float a = pageAlpha * easeOut((m_intro - 0.1f) / 0.5f) * making;
         if (a <= 0.01f) return;
-        const nxui::Rect cover{kCoverX + slide, kCoverY, kCoverW, kCoverH};
-        r.drawRoundedRect({cover.x - 3.f, cover.y + 8.f, cover.width + 6.f, cover.height + 6.f},
-                          nxui::Color(0.f, 0.f, 0.f, 0.3f * a), kCardRadius + 3.f);
+        const nxui::Rect cover = wheelCoverRect(slide);
+        // Its name may run a little past the cover: toward the rows, or (the cover on the right) to the edge.
+        const float room = m_settings.wheelLeft ? 1260.f - cover.x : cover.width + 190.f;
         auto it = m_art.find(g.id);
         const bool haveCard = it != m_art.end() && it->second.card && it->second.card->valid();
         const float artIn = haveCard ? easeOut((m_time - it->second.cardIn) / 0.35f) : 0.f;
@@ -14276,23 +14520,24 @@ void CardsActivity::drawWheel(nxui::Renderer& r, bool rows) {
                 drawCover(r, it->second.card.get(), cover, kCardRadius, kWhite.withAlpha(a * artIn),
                           it->second.kind == ArtKind::Box ? 0.125f : 0.f, 0.f);
         }
-        const std::string name = fit(m_fLabel, g.name, kX - kCoverX - 40.f);
+        const std::string name = fit(m_fLabel, g.name, room);
         textMid(r, m_fLabel, name, cover.x, cover.y + cover.height + 34.f, kWhite.withAlpha(a));
         const std::string about = !g.action.empty() ? g.author : g.path.empty() ? lastPlayed(g.lastPlayed)
                                 : !g.author.empty() ? g.author : tr("Homebrew");
-        const std::string by = fit(m_fBody, about, kX - kCoverX - 40.f);
+        const std::string by = fit(m_fBody, about, room);
         textMid(r, m_fBody, by, cover.x, cover.y + cover.height + 66.f, kMuted.withAlpha(a));
         return;
     }
-    const int lo = std::max(0, static_cast<int>(std::floor(m_scroll - layout::wheel::kShown)));
-    const int hi = std::min(n - 1, static_cast<int>(std::ceil(m_scroll + layout::wheel::kShown)));
+    const float reach = layout::wheel::kShown / wheelScale();
+    const int lo = std::max(0, static_cast<int>(std::floor(m_scroll - reach)));
+    const int hi = std::min(n - 1, static_cast<int>(std::ceil(m_scroll + reach)));
     for (int i = lo; i <= hi; ++i) {
         if (m_leaving && i == m_leaveIndex) continue; // (it launches from its cover: cardRect)
         nxui::Rect row;
         float t = 0.f;
         if (!cardRect(i, row, t)) continue;
         const float rel = static_cast<float>(i) - m_scroll;
-        const layout::WheelSlot w = layout::wheelSlot(rel);
+        const layout::WheelSlot w = wheelAt(rel);
         const float k = std::max(0.f, std::abs(rel));
         const float term = (m_intro - 0.1f - 0.05f * k) / 0.5f;
         const float a = pageAlpha * easeOut(term) * making * w.alpha;
@@ -14436,12 +14681,14 @@ void CardsActivity::drawCardExtras(nxui::Renderer& r) {
             const float x = card.x - 120.f + (card.width + 240.f) * e;
             const float fade = std::sin(e * 3.14159f) * 0.28f * alpha;
             r.pushClipRect(card);
+            r.beginRoundedMask(card, kCardRadius); // (its corners: the card's own, not the rect's)
             for (int band = 0; band < 2; ++band) { // a wide soft band and a narrow bright one
                 const float w = band ? 26.f : 80.f, al = band ? fade : fade * 0.45f;
                 const nxui::Color c(1.f, 1.f, 1.f, al);
                 r.drawTriangle({x, card.y}, {x + w, card.y}, {x - 90.f, card.y + card.height}, c);
                 r.drawTriangle({x + w, card.y}, {x + w - 90.f, card.y + card.height}, {x - 90.f, card.y + card.height}, c);
             }
+            r.endRoundedMask();
             r.popClipRect();
         }
 

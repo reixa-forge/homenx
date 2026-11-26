@@ -53,8 +53,14 @@ struct Settings {
     bool bgMotion = true;     // the background art drifts
     bool gridView = false;    // Y: SwitchU's Wii U grid of icons instead of the card row
     bool xmbView = false;     // Y's third: the cross view (pages along the top, the page's games in a list)
-    int rowStyle = 0;         // the row's look (no grid, no cross view): 0 cards, 1 flow, 2 wheel (HomeLayout.hpp)
+    int rowStyle = 0;         // the row's look (no grid, no cross view): 0 cards, 2 wheel (1: looks since taken out, read as cards)
     int gridStyle = 0;        // the grid's look: 0 icons, 1 channels
+    bool wheelLeft = false;   // Settings > Wheel: the rows down the left (the cover on the right)
+    int wheelSize = 1;        // its rows: 0 small, 1 medium, 2 large
+    bool channelScreen = true; // Settings > Channels: A opens the channel (big picture, Start), else starts it
+    bool channelDisc = true;  // the channel's turning disc
+    bool channelNames = false; // every tile's name (else the chosen one's)
+    int channelTiles = 0;     // 0 4 x 3, 1 3 x 2 bigger
     int startPage = 0;        // (old: the page order's first is where it opens now)
     std::vector<int> pageOrder = {0, 1, 2, 3}; // the pages in order: 0 games, 1 homebrew, 2 Nintendo, 3 media, then custom pages
     int lastPage = -1; // the custom page something was started from: back there afterwards
@@ -221,6 +227,12 @@ struct Settings {
             xmbView = j.value("xmbView", xmbView);
             rowStyle = std::clamp(j.value("rowStyle", rowStyle), 0, 2);
             gridStyle = std::clamp(j.value("gridStyle", gridStyle), 0, 1);
+            wheelLeft = j.value("wheelLeft", wheelLeft);
+            wheelSize = std::clamp(j.value("wheelSize", wheelSize), 0, 2);
+            channelScreen = j.value("channelScreen", channelScreen);
+            channelDisc = j.value("channelDisc", channelDisc);
+            channelNames = j.value("channelNames", channelNames);
+            channelTiles = std::clamp(j.value("channelTiles", channelTiles), 0, 1);
             startPage = j.value("startPage", startPage);
             pageOrder = j.value("pageOrder", pageOrder);
             customPages.clear();
@@ -377,6 +389,12 @@ struct Settings {
         j["gridLayout"] = gridLayout;
         j["rowStyle"] = rowStyle;
         j["gridStyle"] = gridStyle;
+        j["wheelLeft"] = wheelLeft;
+        j["wheelSize"] = wheelSize;
+        j["channelScreen"] = channelScreen;
+        j["channelDisc"] = channelDisc;
+        j["channelNames"] = channelNames;
+        j["channelTiles"] = channelTiles;
         j["gridCursorColour"] = gridCursorColour;
         j["gridPill"] = gridPill;
         j["gridDots"] = gridDots;

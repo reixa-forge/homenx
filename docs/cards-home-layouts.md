@@ -7,27 +7,47 @@ Y on HOME goes to the next layout, round in this order. Settings > Look > Home l
 | Layout | What it looks like | Moving around |
 |---|---|---|
 | Cards | The card row (as before) | Left / Right |
-| **Deck** (new) | A handheld-library style: the chosen game's art fills the screen, its name and details above a row of capsules along the bottom; the chosen capsule is first and larger | Left / Right, L / R, swipe |
-| **Wheel** (new) | The chosen game's cover large on the left; the page's games as glass rows on an arc on the right | Up / Down (Left / Right too), up on the first game reaches the top bar, swipe up / down |
+| **Wheel** (new) | The chosen game's cover large on one side; the page's games as glass rows on an arc on the other | Up / Down (Left / Right too), up on the first game reaches the top bar, swipe up / down |
 | Grid | Wii U style icons (as before) | D-pad over the tiles |
-| **Channels** (new) | A grid of 12 wide tiles a page; the chosen one shows the game's background picture and its name | As the Grid |
+| **Channels** (new) | A grid of wide tiles (12 or 6 a page); the chosen one shows the game's background picture and its name. A opens the channel screen | As the Grid |
 | Cross view | PSP / PS3 style (as before) | As before |
 
-Everything else is the same in every layout: A plays, + opens the options, Rearrange,
-the launch animations, the pages (ZL / ZR) and touch.
+Everything else is the same in every layout: A plays (Channels: opens the channel), + opens the
+options, Rearrange, the launch animations, the pages (ZL / ZR) and touch.
 
-- Deck and Wheel use the card row's selection and scroll, so switching between Cards,
-  Deck and Wheel keeps your place. Between the row and the grid it morphs as before.
-- Deck and Wheel have no bottom panel (their name and details are drawn in the layout).
+- Wheel uses the card row's selection and scroll, so switching between Cards and Wheel
+  keeps your place. Between the row and the grid it morphs as before.
+- Wheel has no bottom panel (its name and details are drawn beside the cover).
 - Channels uses the Grid's pictures (the console's icons) and the background picture
   that is loaded anyway; it loads nothing extra. The Grid's size setting doesn't apply to it.
-- Settings: `rowStyle` (0 cards, 1 deck, 2 wheel) and `gridStyle` (0 icons, 1 channels) in
-  CardsNX's settings file. Older settings files open as before.
+
+## The channel screen (Channels, A)
+
+The channel's picture large (its background picture, else its cover or icon), its name,
+a disc turning for a game, and big **Back** and **Play** buttons (Play chosen first).
+
+- Left / Right choose the button, A presses it, B goes back to the tiles.
+- L / R (ZL / ZR, or the arrows at the sides) go to the channel before / after; the tiles' page follows.
+- + opens the game's options over it; X closes the open game.
+- Touch: the buttons and the arrows; outside the panel goes back.
+
+## Settings
+
+- **Wheel** tab: Wheel on / off, Side (rows on the right or the left; the cover takes the
+  other), Row size (Small, Medium, Large; smaller shows more games).
+- **Channels** tab: Channels on / off, Tiles (4 x 3, or 3 x 2 bigger), Channel screen (off:
+  A starts the game at once), Spinning disc, Every channel's name (off: only the chosen one's).
+- The Grid view tab's toggle is on only for the Grid itself (not Channels).
+- In the settings file: `rowStyle` (0 cards, 2 wheel; 1 is an old look, read as cards),
+  `gridStyle` (0 icons, 1 channels), `wheelLeft`, `wheelSize`, `channelScreen`, `channelDisc`,
+  `channelNames`, `channelTiles`. Older settings files open as before.
 
 ## Check on the console
 
-1. Y cycles Cards, Deck, Wheel, Grid, Channels, Cross view, Cards; the message names each.
-2. Deck: the chosen capsule is first and larger, its name and details above the row; Down does nothing (no panel).
-3. Wheel: Up / Down scroll and repeat when held; up on the first game reaches the top bar; A plays.
-4. Channels: 12 tiles a page, paging with L / R and at the edges; Rearrange works.
-5. Each layout launches a game with your launch animation.
+1. Y cycles Cards, Wheel, Grid, Channels, Cross view, Cards; the message names each.
+2. Wheel: Up / Down scroll and repeat when held; up on the first game reaches the top bar; A plays.
+   Settings > Wheel > Side and Row size change it at once.
+3. Channels: 12 tiles a page (6 with 3 x 2), paging with L / R and at the edges; Rearrange works.
+4. Channels, A: the channel screen; L / R change channel; Play starts it; B is back on the tiles.
+5. Scrolling: the light that crosses the chosen card keeps to its rounded corners.
+6. Each layout launches a game with your launch animation.

@@ -1,8 +1,7 @@
 #pragma once
 // The home screen's layouts (Y cycles them; Settings > Look > Home layout) and
-// the geometry of the three that share the card row's model: Deck and Wheel
-// (the row's selection and scroll, laid out differently) and Channels (a grid
-// style). Pure (no UI): CardsActivity draws what these place.
+// the geometry of the two new ones: Wheel (the row's selection and scroll,
+// laid out differently) and Channels (a grid style). Pure (no UI): CardsActivity draws what these place.
 
 #include "Settings.hpp"
 
@@ -11,15 +10,15 @@
 
 namespace cards::layout {
 
-enum class Layout : int { Cards, Deck, Wheel, Grid, Channels, Cross, Count };
+enum class Layout : int { Cards, Wheel, Grid, Channels, Cross, Count };
 
-constexpr int kRowCards = 0, kRowDeck = 1, kRowWheel = 2, kRowStyles = 3;
+constexpr int kRowCards = 0, kRowWheel = 2; // (1 was Flow, then another look: both gone, read as Cards)
 constexpr int kGridIcons = 0, kGridChannels = 1, kGridStyles = 2;
 
 inline Layout current(const Settings& s) {
     if (s.xmbView) return Layout::Cross;
     if (s.gridView) return s.gridStyle == kGridChannels ? Layout::Channels : Layout::Grid;
-    return s.rowStyle == kRowDeck ? Layout::Deck : s.rowStyle == kRowWheel ? Layout::Wheel : Layout::Cards;
+    return s.rowStyle == kRowWheel ? Layout::Wheel : Layout::Cards;
 }
 
 // Only the fields that say which layout it is change (the grid's size, the
@@ -39,12 +38,12 @@ inline void apply(Settings& s, Layout l) {
     default:
         s.xmbView = false;
         s.gridView = false;
-        s.rowStyle = l == Layout::Deck ? kRowDeck : l == Layout::Wheel ? kRowWheel : kRowCards;
+        s.rowStyle = l == Layout::Wheel ? kRowWheel : kRowCards;
         return;
     }
 }
 
-// Y: Cards, Deck, Wheel, Grid, Channels, Cross, and round again.
+// Y: Cards, Wheel, Grid, Channels, Cross, and round again.
 inline Layout next(Layout l, int step = 1) {
     constexpr int n = static_cast<int>(Layout::Count);
     return static_cast<Layout>(((static_cast<int>(l) + step) % n + n) % n);
@@ -52,7 +51,6 @@ inline Layout next(Layout l, int step = 1) {
 
 inline const char* name(Layout l) {
     switch (l) {
-    case Layout::Deck: return "Deck";
     case Layout::Wheel: return "Wheel";
     case Layout::Grid: return "Grid";
     case Layout::Channels: return "Channels";
@@ -61,43 +59,8 @@ inline const char* name(Layout l) {
     }
 }
 
-inline bool rowModel(Layout l) { return l == Layout::Cards || l == Layout::Deck || l == Layout::Wheel; }
+inline bool rowModel(Layout l) { return l == Layout::Cards || l == Layout::Wheel; }
 inline bool gridModel(Layout l) { return l == Layout::Grid || l == Layout::Channels; }
-
-// ---------------------------------------------------------------- Deck
-// A handheld-console library style: the chosen game's art fills the screen
-// (the background), its name and details sit over a row of portrait capsules
-// along the bottom, and the chosen capsule is the first in the row, larger;
-// the ones before it go off to the left. rel: the capsule's index minus the
-// row's scroll (fractional while it glides).
-namespace deck {
-constexpr float kLeft = 80.f;                 // the chosen capsule's left edge
-constexpr float kW = 176.f, kH = 250.f;       // a capsule
-constexpr float kGrow = 1.14f;                // the chosen one
-constexpr float kPitch = 196.f;               // one capsule to the next (20 apart)
-constexpr float kBottom = 650.f;              // the row's bottom edge
-constexpr float kTitleY = 300.f, kInfoY = 334.f; // the chosen game's name and details, over the row
-}
-
-struct DeckSlot {
-    float x = 0.f, y = 0.f, w = 0.f, h = 0.f;
-    float chosen = 0.f; // 1 the chosen one .. 0 the rest
-    bool shown = false;
-};
-
-inline DeckSlot deckSlot(float rel) {
-    using namespace deck;
-    DeckSlot s;
-    s.chosen = std::clamp(1.f - std::abs(rel), 0.f, 1.f);
-    const float grow = 1.f + (kGrow - 1.f) * s.chosen;
-    s.w = kW * grow;
-    s.h = kH * grow;
-    // The ones after the chosen one make room for its growth (20 px apart either side).
-    s.x = kLeft + rel * kPitch + kW * (kGrow - 1.f) * std::clamp(rel, 0.f, 1.f);
-    s.y = kBottom - s.h;
-    s.shown = s.x < 1290.f && s.x + s.w > -10.f;
-    return s;
-}
 
 // ---------------------------------------------------------------- Wheel
 // The page's games on a gentle arc down the right side, the chosen one in the
@@ -118,25 +81,52 @@ struct WheelSlot {
     bool shown = false;
 };
 
-inline WheelSlot wheelSlot(float rel) {
+// Settings > Wheel > Row size: small, medium, large.
+inline float wheelSize(int size) { return size <= 0 ? 0.85f : size >= 2 ? 1.15f : 1.f; }
+
+// left: the rows down the left side and the cover on the right (mirrored).
+// The fall-off goes by distance on screen (rel x size), so bigger rows show fewer
+// of them and smaller ones more, all on screen; the far rows never run off the side.
+inline WheelSlot wheelSlot(float rel, float size = 1.f, bool left = false) {
     using namespace wheel;
     WheelSlot s;
-    const float a = std::abs(rel);
+    const float d = rel * size, a = std::abs(d);
     s.shown = a < kShown;
     const float k = std::min(a, kEnds) / kEnds;
-    s.scale = 1.f - 0.3f * k;
+    s.scale = (1.f - 0.3f * k) * size;
     s.alpha = (1.f - 0.75f * k) * std::clamp((kShown - a) / (kShown - kEnds), 0.f, 1.f);
     s.w = kW * s.scale;
     s.h = kH * s.scale;
-    s.x = kX + kBend * rel * rel;
-    s.y = kMidY + rel * kPitch - s.h * 0.5f;
+    const float x = std::min(kX + kBend * d * d, 1260.f - s.w);
+    s.x = left ? 1280.f - x - s.w : x;
+    s.y = kMidY + d * kPitch - s.h * 0.5f;
     return s;
 }
 
+struct Box { float x, y, w, h; };
+inline Box wheelCover(bool left = false) {
+    using namespace wheel;
+    return {left ? 1280.f - kCoverX - kCoverW : kCoverX, kCoverY, kCoverW, kCoverH};
+}
+
 // ---------------------------------------------------------------- Channels
-// A grid style: 4 x 3 wide tiles a page.
+// A grid style: wide tiles, 4 x 3 a page (Settings > Channels > Tiles: or 3 x 2, bigger).
 struct GridCell { int cols, rows; float w, h, padX, padY; };
 constexpr GridCell kChannelCell{4, 3, 268.f, 151.f, 22.f, 20.f};
+constexpr GridCell kChannelCellBig{3, 2, 352.f, 198.f, 26.f, 28.f};
+inline GridCell channelCell(int tiles) { return tiles == 1 ? kChannelCellBig : kChannelCell; }
+
+// A channel opened (A on a tile): its picture large, a disc turning in the
+// corner, Back and Start under it; L / R the channel before / after.
+namespace channel {
+constexpr Box kPanel{70.f, 46.f, 1140.f, 628.f};
+constexpr Box kArt{100.f, 76.f, 1080.f, 456.f};       // the picture (cropped to its shape)
+constexpr float kDiscX = 1040.f, kDiscY = 452.f, kDiscR = 104.f; // over the picture's bottom right
+constexpr Box kBack{310.f, 570.f, 300.f, 76.f}, kStart{670.f, 570.f, 300.f, 76.f};
+constexpr float kTurnsPerSecond = 0.6f;               // the disc
+constexpr float kSwapSec = 0.22f;                     // L / R: the picture slides over
+}
+inline bool inBox(const Box& b, float x, float y) { return x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h; }
 constexpr float kChannelRadius = 22.f;
 constexpr float kChannelFocusScale = 1.06f;
 
