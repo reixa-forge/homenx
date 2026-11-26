@@ -3,7 +3,7 @@
 Reference commit `4b7eb80` (tip of upstream `untested`, 2026-11-26). Our fork split from
 upstream at `63205f0` (2026-11-15), so the 14-day window holds 10 new upstream commits; the
 commits from 11-12 to 11-15 are already in our history. Integration branch:
-`upstream-integration`, based on `plus-menu-consolidation` at `e831900`.
+`upstream-integration`, based on `plus-menu-consolidation` at `e2b49f5`.
 Recovery points: `backup/pre-upstream-2026-11-26` (= `2069457`, menu branch when this started); the menu branch itself is untouched.
 
 ## A. Commits reviewed
@@ -47,6 +47,9 @@ interrupted (B3); `hbmenu.nro` read whole into HOME's memory on each homebrew la
   build.sh): `switchu-daemon`, `SwitchU`, `CardsNX` build OK, on 2069457 and again after the rebase
   onto e831900. No compiler warnings in any changed file (98 pre-existing warnings elsewhere).
   Not built here: HomeNX-Loader, managers, achievements overlay (none changed).
+- Full `build.sh` (what build.bat runs in WSL: `JOBS=… XMAKE_ROOT=y bash ./build.sh`), run in the
+  devkita64 container on this branch: all targets, achievements overlay, SD staging and
+  HomeNX-SD-Ready.zip (61 MB, 586 files) succeed, exit 0.
 - Host tests: `tests/run_cards_personalization.sh` (all 11 suites incl. the new safe-file test,
   ASan/UBSan) pass; `tools/check_cards_lang.py` ok (969 rows, 9 languages); all i18n JSON parses.
 - Hardware tests: none (no console access).
@@ -57,7 +60,7 @@ B5 on a 480p TV.
 
 ## D. Applying
 
-`git fetch <bundle> upstream-integration` then review `git log e831900..upstream-integration`.
+`git fetch <bundle> upstream-integration` then review `git log e2b49f5..upstream-integration`.
 Each commit stands alone; drop any with `git rebase -i` (or cherry-pick the ones wanted onto
 `plus-menu-consolidation`). None touch `CardsActivity.cpp`, so it rebases cleanly on new menu
 commits.
