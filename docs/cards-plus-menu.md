@@ -1,7 +1,7 @@
 # The + menu: two levels
 
 Design: [docs/superpowers/specs/2026-11-26-plus-menu-consolidation-design.md](superpowers/specs/2026-11-26-plus-menu-consolidation-design.md).
-The + sheet used to be one long list (up to 17 buttons, the last ones never fully
+The + sheet used to be one long list (about 20 buttons, the last ones never fully
 shown). It now has a short top level and four groups that open in the same sheet.
 B goes back one level; + and X close from any level; touching outside the card closes.
 
@@ -62,7 +62,7 @@ everything is instant.
 3. Delete a page while Move to… is open, then press A on it: no move, failure message.
 4. B inside a group returns to the top level with that group selected; + and X close from every level; touching outside closes.
 5. A sheet with 10 or more buttons: all buttons fully visible once it has opened.
-6. A Nintendo-page applet moved to a custom page.
+6. An applet's + has no Move to…; an inserted, not-installed cartridge's Move to… offers only custom pages.
 7. Move a game to a hidden page: the page reappears.
 8. Motion off: menus open and close instantly, nothing stays dim or stuck.
 
@@ -72,5 +72,5 @@ everything is instant.
   baseline: turn on the perf log in Settings, use the console for a while, and send
   `sdmc:/config/CardsNX/perf.log`.
 - Not tested on hardware yet.
-- When a list opens from +, the backdrop steps from 0.5 to 0.42 dim; it may be smoothed in
-  the final review fixes.
+- When a list opens from +, the backdrop glides from the sheet's 0.5 dim down to the list's 0.42
+  as the sheet fades (no step, no flash).

@@ -873,7 +873,7 @@ private:
     std::uint64_t m_launchTexId = 0;
     float m_launchTexIn = 0.f;
 
-    // Moving a card (Plus > Move, or a touch held 0.55 s), as SwitchU's edit
+    // Moving a card (Plus > Rearrange, or a touch held 0.55 s), as SwitchU's edit
     // mode: the held one rides the cursor, lifted and pulsing; the others jiggle
     // and glide to where they'd go (the grid swaps, as SwitchU's grid drops; the
     // row inserts, as its single row). A puts it down, B puts it all back.

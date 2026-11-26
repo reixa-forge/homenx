@@ -56,7 +56,7 @@ struct Settings {
     int startPage = 0;        // (old: the page order's first is where it opens now)
     std::vector<int> pageOrder = {0, 1, 2, 3}; // the pages in order: 0 games, 1 homebrew, 2 Nintendo, 3 media, then custom pages
     int lastPage = -1; // the custom page something was started from: back there afterwards
-    int sort = 1;             // 0 last played, 1 title, 2 most played, 3 my order (Plus > Move), 4 online players, 5 genre
+    int sort = 1;             // 0 last played, 1 title, 2 most played, 3 my order (Plus > Rearrange), 4 online players, 5 genre
     int haze = 45;            // how much the background art is softened, 0..80
     bool boxArt = true;       // box covers on cards (off: the eShop banner)
     int accent = 0;           // the focus colour (see kAccents)

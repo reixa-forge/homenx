@@ -13,7 +13,7 @@ Put `CardsNX.nro` in `sdmc:/switch/CardsNX/` (HomeNX installs it there for you).
 - **Homebrew page:** your .nro apps (Sphaira, Discord/SwitchCord and the Homebrew Manager first) and your NRO forwarders.
 - **Nintendo page:** News (as HOME), eShop, Album, Controllers, Mii Maker, Friends, Browser (BrowseNX, downloaded the first time) and Settings.
 - **Top bar:** the menu, Discord, the sort, a pill (you, the time, battery, free space, Nextendo players), notifications, music, power and settings. Tap your picture to choose, add or remove users, see your friend code or add a friend.
-- **Custom pages:** up to eight, with any games and apps on them (Settings > Home > Custom pages, then + > Add to custom page on a card). + > Hide this card takes a card off HOME without deleting anything.
+- **Custom pages:** up to eight, with any games and apps on them (Settings > Home > Custom pages, then + > Move to… > Add a copy to a page… on a card). + > More… > Hide this card takes a card off HOME without deleting anything.
 - **Your own pictures:** put JPG or PNG files in `sdmc:/config/CardsNX/my-pictures`: they come first when you choose a card, background or title picture.
 - **Storage:** Settings > Storage shows the space left and moves games between the console and the SD card.
 - **Notifications:** a card when a controller comes or goes, when the battery is low and for achievements. With Ultrahand the battery and controller ones show in games too.
@@ -24,14 +24,14 @@ Put `CardsNX.nro` in `sdmc:/switch/CardsNX/` (HomeNX installs it there for you).
 |---|---|
 | Left / Right | Move between cards |
 | A | Play, or open the app |
-| + or X | Options: Play, Move, Achievements, Delete (.nro), Close software |
+| + or X | Options: Play, Rearrange, Move to…, Appearance…, Info…, More…, Delete (.nro), Close software |
 | L | Discord |
 | R | Quick Settings (Wi-Fi, Airplane mode, brightness, volumes, the song, power) |
 | ZL / ZR | Games / Homebrew / Nintendo |
 | Up / Down | Top bar and panel buttons |
 | − | Notifications |
 
-**Move:** + > Move, then Left/Right carries the card. A puts it down, B puts it back. Your order is kept as "My Order".
+**Rearrange:** + > Rearrange, then Left/Right carries the card. A puts it down, B puts it back. Your order is kept as "My Order".
 
 Built automatically from [ad3333m/homenx](https://github.com/ad3333m/homenx) (`projects/cards`).
 

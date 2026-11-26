@@ -2449,7 +2449,7 @@ void CardsActivity::askGenres() {
     m_cv.notify_all();
 }
 
-// My order (Plus > Move): the saved ids first, in their order; the rest after
+// My order (Plus > Rearrange): the saved ids first, in their order; the rest after
 // (games by title, the rest as they were).
 void CardsActivity::applyOrder(int page) {
     LibraryEdit edit(*this);
@@ -4591,10 +4591,7 @@ std::vector<CardsActivity::MenuItem> CardsActivity::moveLevelItems(const Game& g
         const std::string name = pageName(to); // (a custom page's index can change under it: then it's gone)
         items.push_back(action(name, [this, g, from, to, name]() { moveCardTo(g, from, pageName(to) == name ? to : -1); }));
         items.back().glyph = to == kGames ? "play" : to == kHomebrew ? "dots" : to == kMedia ? "music" : "copy";
-        if (t.hidden) {
-            items.back().detail = "Hidden page";
-            items.back().value = []() { return std::string("Hidden page"); }; // (the sheet shows a value, not a detail)
-        }
+        if (t.hidden) items.back().value = []() { return std::string("Hidden page"); }; // (the sheet shows a value, not a detail)
     }
     bool anyCustom = false;
     for (const CustomPage& page : m_settings.customPages) anyCustom = anyCustom || !page.genre;
@@ -4694,7 +4691,7 @@ CardsActivity::MenuItem CardsActivity::plusItem(plus::Entry e, const Game& g) {
         break;
     case E::Rearrange:
         item = action("Rearrange", [this]() { startMove(); });
-        item.glyph = "arrows";
+        item.glyph = "sort";
         break;
     case E::MoveTo:
     case E::Appearance:
@@ -4885,6 +4882,13 @@ nxui::Rect optionRow(size_t n, size_t i, float dy, bool wide = true) {
     const float pitch = std::min(60.f, (kOptCard.height - kOptRowsY - 40.f - head) / static_cast<float>(rows));
     const float cw = (w - 10.f) * 0.5f;
     return {x + (cw + 10.f) * static_cast<float>(k % 2), top + head + pitch * static_cast<float>(k / 2), cw, pitch - 8.f};
+}
+// The sheet's "B Back", bottom right: textW is its width; the rect it's tapped in
+// (the text starts kOptBackPad in, its middle is the rect's middle).
+constexpr float kOptBackPad = 16.f, kOptBackH = 48.f;
+nxui::Rect optionBackRect(float textW, float dy) {
+    const float x = kOptCard.x + kOptCard.width - 30.f - textW, mid = kOptCard.y + kOptCard.height - 26.f + dy;
+    return {x - kOptBackPad, mid - kOptBackH * 0.5f, textW + 2.f * kOptBackPad, kOptBackH};
 }
 } // namespace
 
@@ -5561,6 +5565,11 @@ bool CardsActivity::optionsTouch() {
             if (run) run();
             return true;
         }
+    if (!wide && optionBackRect(measured(m_fBody, tr("B Back")).x, 0.f).contains(x, y)) { // "B Back": to the top
+        showOptionLevel(plus::Level::Top);
+        m_audio.play("navigation");
+        return true;
+    }
     if (!kOptCard.contains(x, y)) {
         closeOptions();
         m_audio.play("hide_modal");
@@ -5622,8 +5631,8 @@ void CardsActivity::drawOptions(nxui::Renderer& r) {
     r.drawText(fit(m_fBody, about, maxW), {tx, kOptCard.y + 94.f + dy}, &m_fBody, kMuted.withAlpha(a));
 
     const std::string back = "B Back";
-    textMid(r, m_fBody, back, kOptCard.x + kOptCard.width - 30.f - measured(m_fBody, back).x, kOptCard.y + kOptCard.height - 26.f + dy,
-            kMuted.withAlpha(0.7f * a));
+    const nxui::Rect backAt = optionBackRect(measured(m_fBody, tr(back)).x, dy);
+    textMid(r, m_fBody, back, backAt.x + kOptBackPad, backAt.y + backAt.height * 0.5f, kMuted.withAlpha(0.7f * a));
     // The buttons: an icon on a disc, its name; the first one (Play) white.
     const bool wide = m_optLevel == plus::Level::Top;
     const float optT = std::min(m_optIn, m_optLevelIn);
@@ -7222,7 +7231,7 @@ void CardsActivity::buildSettings() {
                 if (kSortCycle[i] == m_settings.sort) at = i;
             sortGames(kSortCycle[(at + d + kSorts) % kSorts]);
             save();
-        }, "My Order is how you arranged them (Plus > Move)"));
+        }, "My Order is how you arranged them (Plus > Rearrange)"));
     home.rows.push_back(toggle("NRO forwarders with the games", [this]() { return m_settings.forwardersOnGames; },
         [this, save]() {
             m_settings.forwardersOnGames = !m_settings.forwardersOnGames;
@@ -7250,7 +7259,7 @@ void CardsActivity::buildSettings() {
         m_bottomSel = std::min(m_bottomSel, m_settings.panelApp.empty() ? 2 : 3);
         save();
     });
-    panel.detail = "The panel's right button. Any app: + on its card > Put on the panel button";
+    panel.detail = "The panel's right button. Any app: + on its card > More… > Put on the panel button";
     home.rows.push_back(std::move(panel));
 #endif
     MenuItem scan = action("Look for new software", [this]() {
@@ -7410,7 +7419,7 @@ void CardsActivity::buildSettings() {
         [this, save]() { m_settings.crossPlusDetails = !m_settings.crossPlusDetails; save(); },
         "On: + slides out the game's details (art, play time, note, achievements). Off: + opens its options"));
     crossTab.rows.push_back(action("Category icons", [this]() { m_sheetOpen = false; openCategoryIcons(); }));
-    crossTab.rows.back().detail = "Your own picture for each category (from config/CardsNX/my-pictures). A game's: + > Icon picture";
+    crossTab.rows.back().detail = "Your own picture for each category (from config/CardsNX/my-pictures). A game's: + > Appearance… > Icon picture";
     m_sheet.push_back(std::move(crossTab));
 
     // The grid (SwitchU's Wii U grid of icons): its own tab too.
@@ -7439,7 +7448,7 @@ void CardsActivity::buildSettings() {
         [this, save]() { m_settings.gridDots = !m_settings.gridDots; save(); }, "Which page of icons you're on"));
     gridTab.rows.push_back(toggle("Favourite stars", [this]() { return m_settings.gridStars; },
         [this, save]() { m_settings.gridStars = !m_settings.gridStars; save(); }, "A star on your favourites' icons"));
-    gridTab.rows.push_back(info("Icons", []() { return tr("+ > Icon picture"); }));
+    gridTab.rows.push_back(info("Icons", []() { return tr("+ > Appearance… > Icon picture"); }));
     m_sheet.push_back(std::move(gridTab));
 
     // The lock screen: its own tab (HomeNX's lock screen shares the password and the picture).
@@ -12591,12 +12600,14 @@ void CardsActivity::openPlaylistAdd(const std::string& name, int chosen) {
             m_settings.save();
             openPlaylistAdd(name, at);
         }));
-        items.back().value = [this, name, path]() {
-            const auto& list = m_settings.playlists[name];
+        items.back().value = [this, name, path]() { // (find: drawing never adds a playlist)
+            const auto pl = m_settings.playlists.find(name);
+            if (pl == m_settings.playlists.end()) return std::string();
+            const auto& list = pl->second;
             return tr(std::find(list.begin(), list.end(), path) != list.end() ? "In it" : "");
         };
     }
-    if (all.empty()) items.push_back(info("No songs yet. Put some in the music folder, or copy a game's (+ > Copy its music).",
+    if (all.empty()) items.push_back(info("No songs yet. Put some in the music folder, or copy a game's (+ > Info… > Copy its music).",
                                           []() { return std::string(); }));
     items.push_back(action("Done", [this, name]() { openPlaylist(name); }));
     openMenu(trf("Songs in {name}", {name}), std::move(items));
@@ -14502,8 +14513,10 @@ void CardsActivity::drawPopup(nxui::Renderer& r) {
     std::vector<MenuItem>& menu = ghost ? m_menuGhost : m_menu; // (drawRow takes a row to change)
     const std::string& title = ghost ? m_menuGhostTitle : m_menuTitle;
     const float a = ghost ? easeOut(m_menuOut) : easeOut(m_menuIn);
-    // Opened from the + sheet: the backdrop at full dim from the first frame (the sheet fading under it draws none).
-    r.drawRect({0.f, 0.f, 1280.f, 720.f}, nxui::Color(0.f, 0.f, 0.f, 0.42f * (m_menuKeepDim && !ghost ? 1.f : a)));
+    // Opened from the + sheet: dimmed from the first frame (the sheet fading under it draws none),
+    // gliding from the sheet's 0.5 down to the list's 0.42 as the sheet fades.
+    const float dim = m_menuKeepDim && !ghost ? std::max(0.42f, 0.5f * easeOut(m_optOut)) : 0.42f * a;
+    r.drawRect({0.f, 0.f, 1280.f, 720.f}, nxui::Color(0.f, 0.f, 0.f, dim));
     nxui::Rect base;
     float rowH = 56.f;
     popupGeometry(menu.size(), base, rowH);
