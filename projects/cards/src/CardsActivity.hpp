@@ -667,6 +667,7 @@ private:
     bool m_optOpen = false;
     int m_optSel = 0;
     float m_optIn = 0.f;
+    float m_optLevelIn = 1.f; // a level change in the open sheet: re-staggers the buttons only
     Game m_optGame;
     std::vector<MenuItem> m_optItems;
     plus::Level m_optLevel = plus::Level::Top; // the level shown: the top, or a group opened in the same sheet

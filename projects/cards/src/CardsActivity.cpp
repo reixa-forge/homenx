@@ -1,5 +1,6 @@
 #include "CardsActivity.hpp"
 #include "MoveTargets.hpp"
+#include "MenuMotion.hpp"
 #include "GameCardPresentation.hpp"
 
 #include "social/NotificationLog.hpp"
@@ -1043,7 +1044,7 @@ bool CardsActivity::wantsFullRate() const {
     if (m_leaving || m_returnTex || m_moving || m_dragging || m_musicVolDrag) return true;
     if (m_wakeStart && m_wakePresentedFrames < 3) return true; // (LockFramePresented counts real frames)
     for (float v : {m_intro, m_pageIn, m_detailIn, m_sheen, m_menuIn, m_taskIn, m_logIn, m_pressT, m_bgFade,
-                    m_sheetIn, m_sheetRowsIn, m_quickIn, m_powerIn, m_dotsIn, m_optIn, m_pickIn, m_musicIn,
+                    m_sheetIn, m_sheetRowsIn, m_quickIn, m_powerIn, m_dotsIn, m_optIn, m_optLevelIn, m_pickIn, m_musicIn,
                     m_quickListIn})
         if (v < 1.f) return true;
     const float target = static_cast<float>(m_sels[m_page]);
@@ -4509,6 +4510,7 @@ void CardsActivity::openOptions() {
     showOptionLevel(plus::Level::Top);
     m_optOpen = true;
     m_optIn = m_settings.motion ? 0.f : 1.f;
+    m_optLevelIn = 1.f; // (the opening is m_optIn's stagger)
     m_audio.play("show_modal");
 }
 
@@ -4550,6 +4552,9 @@ void CardsActivity::showOptionLevel(plus::Level level) {
     m_optItems = std::move(items);
     m_optLevel = level;
     m_optSel = chosen;
+    // Opening the sheet: m_optIn alone staggers the buttons. A level change in
+    // the open sheet: only the buttons re-stagger (the frame stays as it is).
+    m_optLevelIn = (m_optOpen && m_settings.motion) ? 0.f : 1.f;
 }
 
 // Move to…: every page the card can go to (moves::destinations: the page order,
@@ -5597,9 +5602,10 @@ void CardsActivity::drawOptions(nxui::Renderer& r) {
             kMuted.withAlpha(0.7f * a));
     // The buttons: an icon on a disc, its name; the first one (Play) white.
     const bool wide = m_optLevel == plus::Level::Top;
+    const float optT = std::min(m_optIn, m_optLevelIn);
     for (size_t i = 0; i < m_optItems.size(); ++i) {
         const MenuItem& item = m_optItems[i];
-        const float ta = a * easeOut((m_optIn - 0.04f * static_cast<float>(i)) / 0.7f);
+        const float ta = a * easeOut(cards::motion::stagger(optT, static_cast<int>(i), static_cast<int>(m_optItems.size())));
         nxui::Rect row = optionRow(m_optItems.size(), i, dy, wide);
         row.x += 16.f * (1.f - ta);
         const bool chosen = static_cast<int>(i) == m_optSel, primary = wide && i == 0;
@@ -10131,22 +10137,23 @@ void CardsActivity::onUpdate(float dt) {
     step(m_pageIn, 0.38f);
     step(m_detailIn, 0.25f);
     step(m_sheen, 0.8f);
-    step(m_menuIn, 0.2f);
-    step(m_taskIn, 0.2f);
-    step(m_logIn, 0.2f);
+    step(m_menuIn, cards::motion::kPopupOpen);
+    step(m_taskIn, cards::motion::kPopupOpen);
+    step(m_logIn, cards::motion::kPopupOpen);
     step(m_pressT, 0.22f);
     step(m_bgFade, 0.15f); // (was 0.45: the swap should feel instant)
-    step(m_sheetIn, 0.24f);
+    step(m_sheetIn, cards::motion::kSheetOpen);
     step(m_sheetRowsIn, 0.22f);
-    step(m_quickIn, 0.22f);
-    step(m_powerIn, 0.28f);
-    step(m_dotsIn, 0.26f);
-    step(m_optIn, 0.26f);
-    step(m_pickIn, 0.26f);
-    step(m_musicIn, 0.26f);
-    step(m_quickListIn, 0.2f);
+    step(m_quickIn, cards::motion::kSheetOpen);
+    step(m_powerIn, cards::motion::kSheetOpen);
+    step(m_dotsIn, cards::motion::kSheetOpen);
+    step(m_optIn, cards::motion::kSheetOpen);
+    step(m_optLevelIn, cards::motion::kLevelChange);
+    step(m_pickIn, cards::motion::kSheetOpen);
+    step(m_musicIn, cards::motion::kSheetOpen);
+    step(m_quickListIn, cards::motion::kPopupOpen);
 #ifdef SWITCHU_MENU
-    step(m_newsIn, 0.24f);
+    step(m_newsIn, cards::motion::kSheetOpen);
 #endif
     const float target = static_cast<float>(sel());
     if (m_flingV != 0.f && !m_dragging && !gridOn() && !games().empty()) {

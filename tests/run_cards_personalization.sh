@@ -26,6 +26,10 @@ c++ -std=gnu++20 -Iprojects/cards/src \
     "${sanitizer_flags[@]}" tests/plus_menu_test.cpp -o "$test_dir/plus-menu-test"
 ASAN_OPTIONS=detect_leaks=0 timeout --kill-after=5s 20s "$test_dir/plus-menu-test"
 echo 'Plus menu model tests passed.'
+c++ -std=gnu++20 -Iprojects/cards/src \
+    "${sanitizer_flags[@]}" tests/menu_motion_test.cpp -o "$test_dir/menu-motion-test"
+ASAN_OPTIONS=detect_leaks=0 timeout --kill-after=5s 20s "$test_dir/menu-motion-test"
+echo 'Menu motion tests passed.'
 c++ -std=gnu++20 -Iprojects/common/include -I"$json_include" \
     "${sanitizer_flags[@]}" tests/lock_screen_wake_test.cpp -o "$test_dir/wake-test"
 ASAN_OPTIONS=detect_leaks=0 timeout --kill-after=5s 20s "$test_dir/wake-test"
