@@ -125,9 +125,14 @@ public:
     // rounded rect r (a sheen over a rounded card). Not for the rounded-shape
     // calls (they set their own shape); not nested.
 #ifdef NXUI_BACKEND_DEKO3D
+    // A picture in a circle (centre, radius), turned by `turn` radians (clockwise): a disc's label.
+    void drawTextureDisc(const Texture* tex, const Vec2& center, float radius, float turn, const Color& tint = Color::white());
     void beginRoundedMask(const Rect& r, float radius) { beginShape(r, radius); }
     void endRoundedMask() { endShape(); }
 #else
+    void drawTextureDisc(const Texture* tex, const Vec2& c, float radius, float, const Color& tint = Color::white()) {
+        drawTextureRounded(tex, {c.x - radius, c.y - radius, 2.f * radius, 2.f * radius}, radius, tint); // (SDL2: not turned)
+    }
     void beginRoundedMask(const Rect&, float) {} // (SDL2: the clip rect only)
     void endRoundedMask() {}
 #endif

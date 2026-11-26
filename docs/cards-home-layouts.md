@@ -27,7 +27,7 @@ The channel's picture large (its background picture, else its cover or icon), it
 a disc turning for a game, and big **Back** and **Play** buttons (Play chosen first).
 
 - Left / Right choose the button, A presses it, B goes back to the tiles.
-- L / R (ZL / ZR, or the arrows at the sides) go to the channel before / after; the tiles' page follows.
+- L / R (ZL / ZR, or the arrows at the sides) go to the channel before / after; the tiles behind stay still and are on that channel's page when you go back.
 - + opens the game's options over it; X closes the open game.
 - Touch: the buttons and the arrows; outside the panel goes back.
 

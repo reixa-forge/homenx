@@ -907,6 +907,25 @@ void Renderer::drawTextureRounded(const Texture* tex, const Rect& dest, float ra
                       tint, Rect{0.f, 0.f, 1.f, 1.f});
 }
 
+// The quad stays upright; its corners' texture coordinates turn the other way
+// about the picture's middle, so the picture turns. The circle's mask hides the
+// corners (their coordinates fall outside the picture); inside it they don't.
+void Renderer::drawTextureDisc(const Texture* tex, const Vec2& center, float radius, float turn, const Color& tint) {
+    if (!tex || radius <= 0.f) return;
+    bindTexture(tex->descriptorSlot());
+    const Rect dest{center.x - radius, center.y - radius, 2.f * radius, 2.f * radius};
+    const float cs = std::cos(turn), sn = std::sin(turn);
+    struct Corner { float x, y, u, v; } q[4];
+    const float dx[4] = {-1.f, 1.f, 1.f, -1.f}, dy[4] = {-1.f, -1.f, 1.f, 1.f};
+    for (int i = 0; i < 4; ++i)
+        q[i] = {center.x + dx[i] * radius, center.y + dy[i] * radius,
+                0.5f + 0.5f * (dx[i] * cs + dy[i] * sn), 0.5f + 0.5f * (-dx[i] * sn + dy[i] * cs)};
+    beginShape(dest, radius);
+    if (m_vtxCount + 6 > GpuDevice::MAX_VERTICES) flush();
+    for (int i : {0, 1, 2, 0, 2, 3}) addVertex(q[i].x, q[i].y, q[i].u, q[i].v, tint);
+    endShape();
+}
+
 void Renderer::drawTextureSubRounded(const Texture* tex, const Rect& src,
                                      const Rect& dest, float radius,
                                      const Color& tint) {

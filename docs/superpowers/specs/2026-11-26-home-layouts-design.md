@@ -46,9 +46,11 @@ cycling. The existing Grid view / Cross view toggles stay and agree with it.
 - Channels, A on a tile (or tapping the chosen one): a panel zooms out of the middle with
   the game's picture large (background picture, else cover, else icon), its name on a
   shade along the bottom, a silver disc turning over the picture's corner for a game
-  (light wedges and rim marks go round; nxui has no rotated textures, so the label stays
-  upright), and big Back and Play buttons. Left / Right choose, A presses, B back; L / R
-  (and side arrows / taps) the channel before / after with a slide, the grid page following.
+  (its label, the game's icon, turns: nxui `drawTextureDisc` turns the texture coordinates
+  inside the circle mask; the light on the disc stays put), and big Back and Play buttons.
+  Left / Right choose, A presses, B back; L / R (and side arrows / taps) the channel before /
+  after with a slide. HOME behind stays still (no page slide or sheen; nearly hidden) and
+  catches up to the chosen tile's page when the screen closes.
   + the options over it; it closes for Move, a launch, or a layout change.
 - Settings > Wheel: on / off, Side (rows right or left, mirrored), Row size (0.85 / 1 / 1.15:
   scale and pitch; the fall-off goes by on-screen distance so all rows stay on screen).

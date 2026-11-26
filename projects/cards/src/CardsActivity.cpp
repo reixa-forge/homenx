@@ -3761,6 +3761,7 @@ bool CardsActivity::closeEverything() {
     bool any = !m_menu.empty() || m_notifOpen || m_sheetOpen || m_moving || m_quickOpen || m_powerOpen || m_dotsOpen
             || m_optOpen || m_pickOpen || m_musicOpen || m_spQrOpen || m_chanOpen || m_task != Task::None;
     closeTask();
+    if (m_chanOpen) channelPageCatchUp();
     m_chanOpen = false;
     m_chanIn = 0.f;
     if (m_spQrOpen) {
@@ -12132,8 +12133,16 @@ void CardsActivity::openChannel() {
     wantArt();
 }
 
+// The tiles behind on the chosen one's page, at once (L / R didn't move them).
+void CardsActivity::channelPageCatchUp() {
+    if (!gridOn() || m_gridPer <= 0) return;
+    m_gridShown = m_gridFrom = std::max(0, sel()) / m_gridPer;
+    m_gridSlideT = 1.f;
+}
+
 void CardsActivity::closeChannel() {
     if (!m_chanOpen) return;
+    channelPageCatchUp();
     m_chanOpen = false;
     if (!m_settings.motion) m_chanIn = 0.f;
     m_audio.play("hide_modal");
@@ -12145,13 +12154,14 @@ void CardsActivity::channelStep(int dir) {
     const int to = std::clamp(sel() + dir, 0, n - 1);
     if (n == 0 || to == sel()) return;
     select(to); // (its sound, its background asked for)
-    if (gridOn() && m_gridPer > 0) gridSlideTo(to / m_gridPer);
+    m_sheen = 1.f; // (the tiles behind stay still: no light across the new one, no page slide; closing catches them up)
     m_chanDir = dir;
     m_chanSwap = m_settings.motion ? 0.f : 1.f;
     wantArt();
 }
 
 void CardsActivity::channelStart() {
+    channelPageCatchUp();
     m_chanOpen = false; // (it zooms away as the game starts from its tile)
     m_audio.play("activation");
     press(1, sel());
@@ -12164,6 +12174,7 @@ void CardsActivity::updateChannel() {
     auto& in = app().input();
     using B = nxui::Button;
     if (!channelsOn() || !current() || m_moving || m_leaving) { // (+ > Move, Play...: it gives way)
+        channelPageCatchUp();
         m_chanOpen = false;
         return;
     }
@@ -12216,7 +12227,10 @@ bool CardsActivity::channelTouch(float x, float y) {
 void CardsActivity::drawChannel(nxui::Renderer& r) {
     const float dt = std::clamp(m_time - m_chanAt, 0.f, 0.1f);
     m_chanAt = m_time;
-    if (m_chanOpen && (!channelsOn() || m_moving || m_leaving)) m_chanOpen = false;
+    if (m_chanOpen && (!channelsOn() || m_moving || m_leaving)) {
+        channelPageCatchUp();
+        m_chanOpen = false;
+    }
     m_chanIn += ((m_chanOpen ? 1.f : 0.f) - m_chanIn) * (m_settings.motion ? std::min(1.f, dt * 11.f) : 1.f);
     if (!m_chanOpen && m_chanIn < 0.01f) m_chanIn = 0.f;
     m_chanSwap = std::min(1.f, m_chanSwap + dt / layout::channel::kSwapSec);
@@ -12232,7 +12246,7 @@ void CardsActivity::drawChannel(nxui::Renderer& r) {
     auto at = [k](const layout::Box& b) {
         return nxui::Rect{640.f + (b.x - 640.f) * k, 360.f + (b.y - 360.f) * k, b.w * k, b.h * k};
     };
-    r.drawRect({0.f, 0.f, 1280.f, 720.f}, nxui::Color(0.f, 0.f, 0.f, 0.55f * a));
+    r.drawRect({0.f, 0.f, 1280.f, 720.f}, nxui::Color(0.f, 0.f, 0.f, 0.9f * a)); // (nearly hides HOME: what's behind it doesn't show L / R)
     const nxui::Rect panel = at(layout::channel::kPanel);
     const float pr = 30.f * k;
     frost(r, panel, pr, nxui::Color(0.06f, 0.07f, 0.10f, 0.88f * a));
@@ -12282,8 +12296,9 @@ void CardsActivity::drawChannel(nxui::Renderer& r) {
         r.drawCircle(c, R, nxui::Color(0.80f, 0.83f, 0.88f, a), 64);
         r.drawCircle(c, R * 0.96f, nxui::Color(0.90f, 0.92f, 0.95f, a), 64);
         const float turn = m_chanSpin * 6.2831853f;
-        for (int w = 0; w < 2; ++w) { // two wedges of light, opposite each other
-            const float a0 = turn + 3.14159265f * static_cast<float>(w);
+        // The light on it stays put (as a real disc's does); the label turns under it.
+        for (int w = 0; w < 2; ++w) { // two soft wedges of light, opposite each other
+            const float a0 = -2.2f + 3.14159265f * static_cast<float>(w);
             constexpr int kSteps = 6;
             for (int s = 0; s < kSteps; ++s) {
                 const float t0 = a0 + 0.12f * static_cast<float>(s), t1 = t0 + 0.12f;
@@ -12293,16 +12308,11 @@ void CardsActivity::drawChannel(nxui::Renderer& r) {
                                nxui::Color(1.f, 1.f, 1.f, 0.42f * fade * a));
             }
         }
-        const float lr = R * 0.62f; // the label
+        const float lr = R * 0.62f; // the label: the game's icon, turning
         const nxui::Texture* label = art && art->stock && art->stock->valid() ? art->stock.get()
                                    : art && art->icon && art->icon->valid() ? art->icon.get() : nullptr;
-        if (label) r.drawTextureRounded(label, {c.x - lr, c.y - lr, 2.f * lr, 2.f * lr}, lr, kWhite.withAlpha(a));
+        if (label) r.drawTextureDisc(label, c, lr, turn, kWhite.withAlpha(a));
         else r.drawCircle(c, lr, accent(0.85f * a), 48);
-        for (int d = 0; d < 3; ++d) { // marks on the label's rim, turning with it
-            const float t = turn + 2.0943951f * static_cast<float>(d);
-            r.drawCircle({c.x + std::cos(t) * lr * 0.82f, c.y + std::sin(t) * lr * 0.82f}, 4.f * k,
-                         nxui::Color(1.f, 1.f, 1.f, 0.7f * a), 12);
-        }
         r.drawCircle(c, R * 0.17f, nxui::Color(0.72f, 0.75f, 0.80f, a), 32); // the hub
         r.drawCircle(c, R * 0.09f, nxui::Color(0.05f, 0.06f, 0.09f, a), 24); // the hole
     }

@@ -295,6 +295,7 @@ private:
     bool channelScreenOn() const { return channelsOn() && m_settings.channelScreen && !m_moving; }
     void openChannel();
     void closeChannel();
+    void channelPageCatchUp();
     void channelStep(int dir);
     void channelStart();
     void updateChannel();
