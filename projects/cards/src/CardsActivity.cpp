@@ -11558,7 +11558,9 @@ void CardsActivity::drawBackground(nxui::Renderer& r) {
     const float lean = !m_leaving ? 0.f
                      : style == kDive ? 0.45f * easeIn(m_leaveT)
                      : style == kZoom || style == kFlip ? 0.10f * easeInOut(m_leaveT) : 0.f;
-    const float zoom = (motion ? 1.06f + 0.03f * std::sin(m_decoTime * 0.11f) : 1.04f) + lean;
+    // (Kept small: the zoom is how far the picture is blown up past its pixels; 1.06-1.09 made
+    // every background visibly soft. Still, it's 1:1.)
+    const float zoom = (motion ? 1.025f + 0.01f * std::sin(m_decoTime * 0.11f) : 1.f) + lean;
     const float panX = motion ? 0.25f * std::sin(m_decoTime * 0.07f) : 0.f;
     const float panY = motion ? 0.2f * std::cos(m_decoTime * 0.05f) : 0.f;
     if (m_wallTex && m_wallTex->valid()) { // Settings > Look > Background: one picture for everything
