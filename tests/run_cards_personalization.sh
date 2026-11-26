@@ -18,6 +18,10 @@ c++ -std=gnu++20 -Iprojects/cards/src -Iprojects/common/include -I"$json_include
     "${sanitizer_flags[@]}" tests/cards_personalization_test.cpp -o "$test_dir/test"
 ASAN_OPTIONS=detect_leaks=0 timeout --kill-after=5s 20s "$test_dir/test"
 echo 'Cards personalization tests passed.'
+c++ -std=gnu++20 -Iprojects/cards/src -Iprojects/common/include -I"$json_include" \
+    "${sanitizer_flags[@]}" tests/move_targets_test.cpp -o "$test_dir/move-test"
+ASAN_OPTIONS=detect_leaks=0 timeout --kill-after=5s 20s "$test_dir/move-test"
+echo 'Move destination tests passed.'
 c++ -std=gnu++20 -Iprojects/common/include -I"$json_include" \
     "${sanitizer_flags[@]}" tests/lock_screen_wake_test.cpp -o "$test_dir/wake-test"
 ASAN_OPTIONS=detect_leaks=0 timeout --kill-after=5s 20s "$test_dir/wake-test"
