@@ -40,6 +40,7 @@
 #include <string>
 #include <thread>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace cards {
@@ -659,7 +660,7 @@ private:
     void searchPicker();
     // Text typed in: HomeNX's keyboard as HOME, the system's as an app.
     void askText(const std::string& title, const std::string& guide, const std::string& initial, int maxLength,
-                 std::function<void(const std::string&)> done);
+                 std::function<void(const std::string&)> done);  // (B / cancel: back where it was asked from, see m_backArm)
     void updatePicker();
     bool pickerTouch();
     void drawPicker(nxui::Renderer& r);
@@ -994,6 +995,21 @@ private:
     // Popups: a list (menu, power, music, users, a game's options), or the notifications.
     std::string m_menuTitle;
     std::function<void()> m_menuBack; // B: back to the list before (set after openMenu), else closed
+    // B goes back one step, not out: while a + sheet button or a list's row runs,
+    // m_backArm reopens what it was run from (the sheet at its level, or the list
+    // as it was). Whatever that run opens takes it as its way back: a list (its
+    // m_menuBack), the picker (m_pickBack), the details panel (m_crossBack), the
+    // keyboard (its cancel). Unclaimed, it's dropped when the run ends.
+    std::function<void()> m_backArm;
+    bool m_backArmList = false;          // the arm reopens a list (title m_backArmTitle)
+    std::string m_backArmTitle;
+    std::function<void()> m_backArmParent; // that list's own way back (a list that opens itself again keeps it)
+    int m_backArmSel = 0;
+    std::function<void()> m_pickBack, m_crossBack;
+    void armBackToList(); // m_backArm: the open list again, as it is now
+    void armBackToOptions(); // m_backArm: the + sheet again, at its level and button
+    std::function<void()> takeBackArm() { m_backArmList = false; m_backArmParent = nullptr; return std::exchange(m_backArm, nullptr); }
+    void reopenOptions(const Game& g, plus::Level level, int sel);
     std::vector<MenuItem> m_menu;
     int m_menuSel = 0;
     float m_menuOut = 0.f;              // 1 when the list closes -> 0: its ghost fades (no input)
@@ -1205,7 +1221,8 @@ private:
     nxui::Font m_socFont, m_socSmall;         // CardsNX's typeface at the sizes HomeNX's screens are laid out for
     void ensureTextEntry();
     void enterText(const std::string& title, const std::string& guide, const std::string& initial, int maxLength,
-                   std::function<void(const std::string&)> done, nxui::Widget* back, bool sensitive = false);
+                   std::function<void(const std::string&)> done, nxui::Widget* back, bool sensitive = false,
+                   std::function<void()> cancelled = nullptr);
     bool m_discordTokenEntryPending = false; // Discord's panel asked for the token keyboard
     void openSocial();
     void syncPopupsFlag();

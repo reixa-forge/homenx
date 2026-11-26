@@ -55,7 +55,8 @@ In this order, each only when it applies to the chosen card:
 5. Rearrange (was "Move": reorder on this page)
 6. **Move to…** (one destination selector, section 3)
 7. **Appearance…** (section 4)
-8. **Info…**: Details, About this game, Note, Copy its music
+8. **Info…**: About this game, Note, Copy its music (Details is on the top level, after
+   Close software: crimson's call after the first console test, 2026-11-26)
 9. **More…**: Search games, Put on the panel button, Hide this card
 10. Delete (red)
 

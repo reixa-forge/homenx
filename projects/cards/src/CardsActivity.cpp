@@ -3265,15 +3265,16 @@ void CardsActivity::ensureTextEntry() {
 
 void CardsActivity::enterText(const std::string& title, const std::string& guide, const std::string& initial,
                               int maxLength, std::function<void(const std::string&)> done, nxui::Widget* back,
-                              bool sensitive) {
+                              bool sensitive, std::function<void()> cancelled) {
     ensureTextEntry();
     if (m_textEntry->isEditing()) return; // (one fading out is replaced)
     m_textEntry->onAccept([this, done, back](const std::string& text) {
         if (done) done(text);
         if (back) focusManager().setFocus(back);
     });
-    m_textEntry->onCancel([this, back]() {
+    m_textEntry->onCancel([this, back, cancelled]() {
         if (back) focusManager().setFocus(back);
+        if (cancelled) cancelled();
     });
     m_audio.play("show_modal");
     m_textEntry->show({tr(title), tr(guide), initial, std::max(1, maxLength), false, sensitive});
@@ -4063,6 +4064,7 @@ void CardsActivity::openGallery(int mode) {
     if (!m_pickOpen) {
         m_pickIn = m_settings.motion ? 0.f : 1.f;
         m_audio.play("show_modal");
+        m_pickBack = takeBackArm(); // (B: back where it was opened from)
     }
     m_pickOpen = true;
 }
@@ -4500,11 +4502,49 @@ void CardsActivity::openMenu(std::string title, std::vector<MenuItem> items) {
     if (m_optOpen || m_optOut > 0.f) m_menuKeepDim = true; // from the + sheet: one dim layer throughout
     m_menuOut = 0.f; // (a list closing under it goes at once: no ghost under the new one)
     m_menuGhost.clear();
+    // B: back to what ran this (m_backArm). A list that opens itself again (a
+    // row that changes it) keeps its place and its own way back.
+    const bool again = m_backArm && m_backArmList && title == m_backArmTitle;
+    const int sel = m_backArmSel;
+    std::function<void()> parent = std::move(m_backArmParent);
+    std::function<void()> back = takeBackArm();
     m_menuTitle = std::move(title);
     m_menu = std::move(items);
-    m_menuBack = nullptr;
-    m_menuSel = 0;
-    m_menuIn = m_settings.motion ? 0.f : 1.f;
+    m_menuBack = again ? std::move(parent) : std::move(back);
+    m_menuSel = again ? std::clamp(sel, 0, std::max(0, static_cast<int>(m_menu.size()) - 1)) : 0;
+    m_menuIn = (m_settings.motion && !again) ? 0.f : 1.f;
+    if (!again) m_audio.play("show_modal");
+}
+
+void CardsActivity::armBackToList() {
+    m_backArmList = true;
+    m_backArmTitle = m_menuTitle;
+    m_backArmSel = m_menuSel;
+    m_backArmParent = m_menuBack;
+    m_backArm = [this, title = m_menuTitle, items = m_menu, sel = m_menuSel, back = m_menuBack]() {
+        openMenu(title, items);
+        m_menuSel = std::clamp(sel, 0, std::max(0, static_cast<int>(m_menu.size()) - 1));
+        m_menuBack = back;
+    };
+}
+
+void CardsActivity::armBackToOptions() {
+    m_backArmList = false;
+    m_backArmParent = nullptr;
+    m_backArm = [this, g = m_optGame, level = m_optLevel, sel = m_optSel]() { reopenOptions(g, level, sel); };
+}
+
+// Back to the + sheet (B on what one of its buttons opened): that level, that button.
+void CardsActivity::reopenOptions(const Game& g, plus::Level level, int sel) {
+    m_optGame = g;
+    m_optLevel = level;
+    m_optOpen = false; // (showOptionLevel: a sheet opening, not a level change)
+    showOptionLevel(level);
+    m_optSel = std::clamp(sel, 0, std::max(0, static_cast<int>(m_optItems.size()) - 1));
+    m_optOpen = true;
+    m_optOut = 0.f;
+    m_optIn = m_settings.motion ? 0.f : 1.f;
+    m_optLevelIn = 1.f;
     m_audio.play("show_modal");
 }
 
@@ -5101,6 +5141,7 @@ void CardsActivity::openTitlePicker(const Game& g, bool cover, const std::string
     if (!m_pickOpen) {
         m_pickIn = m_settings.motion ? 0.f : 1.f;
         m_audio.play("show_modal");
+        m_pickBack = takeBackArm(); // (B: back where it was opened from)
     }
     m_pickOpen = true;
 }
@@ -5130,8 +5171,9 @@ void CardsActivity::searchPicker() {
 // The keyboard: HomeNX's as HOME, else the system's.
 void CardsActivity::askText(const std::string& title, const std::string& guide, const std::string& initial, int maxLength,
                             std::function<void(const std::string&)> done) {
+    std::function<void()> back = takeBackArm(); // (cancelled: back where it was asked from)
 #ifdef SWITCHU_MENU
-    enterText(title, guide, initial, maxLength, std::move(done), nullptr);
+    enterText(title, guide, initial, maxLength, std::move(done), nullptr, false, std::move(back));
 #else
     SwkbdConfig kbd;
     if (R_FAILED(swkbdCreate(&kbd, 0))) return;
@@ -5143,7 +5185,11 @@ void CardsActivity::askText(const std::string& title, const std::string& guide, 
     char out[512] = {};
     const Result rc = swkbdShow(&kbd, out, sizeof(out));
     swkbdClose(&kbd);
-    if (R_SUCCEEDED(rc) && done) done(out);
+    if (R_SUCCEEDED(rc)) {
+        if (done) done(out);
+    } else if (back) {
+        back();
+    }
 #endif
 }
 
@@ -5284,6 +5330,8 @@ void CardsActivity::updatePicker() {
     if (in.isDown(B::B) || in.isDown(B::Plus)) {
         m_pickOpen = false;
         m_audio.play("hide_modal");
+        auto back = std::exchange(m_pickBack, nullptr); // B: back where it was opened from (+: closed)
+        if (back && in.isDown(B::B)) back();
         return;
     }
     if (in.isDown(B::Y) && !m_pickJob.valid() && !m_pickWall) {
@@ -5546,9 +5594,12 @@ void CardsActivity::updateOptions() {
     if (in.isDown(B::A) && m_optSel >= 0 && m_optSel < n) {
         const MenuItem& item = m_optItems[(size_t)m_optSel];
         auto run = item.run;
-        if (!item.stay) closeOptions(); // (a group opens in the sheet)
+        const bool stay = item.stay;
+        if (!stay) armBackToOptions(); // (what it opens: B comes back here)
+        if (!stay) closeOptions(); // (a group opens in the sheet)
         m_audio.play("activation");
         if (run) run();
+        takeBackArm();
     }
 }
 
@@ -5561,8 +5612,11 @@ bool CardsActivity::optionsTouch() {
         if (optionRow(m_optItems.size(), i, 0.f, wide).contains(x, y)) {
             m_optSel = static_cast<int>(i);
             auto run = m_optItems[i].run;
-            if (!m_optItems[i].stay) closeOptions(); // (a group opens in the sheet)
+            const bool stay = m_optItems[i].stay;
+            if (!stay) armBackToOptions();
+            if (!stay) closeOptions(); // (a group opens in the sheet)
             if (run) run();
+            takeBackArm();
             return true;
         }
     if (!wide && optionBackRect(measured(m_fBody, tr("B Back")).x, 0.f).contains(x, y)) { // "B Back": to the top
@@ -9421,14 +9475,19 @@ void CardsActivity::listInput(std::vector<MenuItem>& items, int& sel, const std:
         else close();
         return;
     }
+    const bool popup = &items == &m_menu; // (B from what its rows open: this list again)
     if (in.isDown(B::X) && item.onX) {
         auto run = item.onX; // (it may open the list again)
+        if (popup) armBackToList();
         run();
+        takeBackArm();
         return;
     }
     if (in.isDown(B::Y) && item.onY) {
         auto run = item.onY;
+        if (popup) armBackToList();
         run();
+        takeBackArm();
         return;
     }
     if (in.isDown(B::A)) {
@@ -9437,9 +9496,11 @@ void CardsActivity::listInput(std::vector<MenuItem>& items, int& sel, const std:
             m_audio.play(item.kind == MenuItem::Toggle && item.level && item.level() < 0.5f ? "toggle_off" : "toggle_on");
         } else if (item.kind == MenuItem::Action && item.run) {
             auto run = item.run; // close() may take the list (and the row) away
+            if (popup) armBackToList();
             if (!item.stay) close();
             else m_audio.play("activation");
             run();
+            takeBackArm();
         }
     }
 }
@@ -9636,8 +9697,13 @@ bool CardsActivity::handleTouch() {
         const nxui::Rect r{box.x + 14.f, box.y + 66.f + rowH * static_cast<float>(shownRow), box.width - 28.f, rowH - 6.f};
         if (tapRow(item, r, r.x + r.width - 18.f - 150.f, 150.f) && item.run) {
             auto run = item.run;
-            if (!item.stay) closeMenu();
+            armBackToList();
+            if (!item.stay) {
+                closeMenu();
+                m_menuBack = nullptr;
+            }
             run();
+            takeBackArm();
         }
         return true;
     }
@@ -11795,6 +11861,7 @@ void CardsActivity::restoreBackup(const std::string& dir) {
 
 void CardsActivity::openCrossInfo() {
     if (games().empty()) return;
+    if (!m_crossInfo) m_crossBack = takeBackArm(); // (B: back where it was opened from)
     m_crossInfo = true;
     m_crossInfoSel = 0;
     m_crossFacts.id = 0; // (read again for this game)
@@ -11857,6 +11924,8 @@ void CardsActivity::updateCrossInfo() {
     if (in.isDown(B::B) || in.isDown(B::Plus) || games().empty()) {
         m_crossInfo = false;
         m_audio.play("hide_modal");
+        auto back = std::exchange(m_crossBack, nullptr); // B: back where it was opened from (+: closed)
+        if (back && in.isDown(B::B) && !games().empty()) back();
         return;
     }
     const auto actions = crossInfoActions();
@@ -12073,6 +12142,7 @@ void CardsActivity::openIconPicker(const Game& g, const std::string& key, bool m
     if (!m_pickOpen) {
         m_pickIn = m_settings.motion ? 0.f : 1.f;
         m_audio.play("show_modal");
+        m_pickBack = takeBackArm(); // (B: back where it was opened from)
     }
     m_pickOpen = true;
     if (mineOnly) say("Your pictures: put PNG or JPG files in config/CardsNX/my-pictures.");

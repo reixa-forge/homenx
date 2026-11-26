@@ -50,7 +50,6 @@ inline std::vector<Entry> entries(Level level, const Card& c)
         add(c.installed, Entry::DownloadPictures);
         break;
     case Level::Info:
-        add(c.showDetails, Entry::Details);
         add(c.installed && c.game, Entry::AboutGame);
         add(c.hasId && !c.get, Entry::Note);
         add(c.installed && c.game, Entry::CopyMusic);
@@ -64,6 +63,7 @@ inline std::vector<Entry> entries(Level level, const Card& c)
         add(true, Entry::Play);
         add(c.hasUpdate, Entry::Update);
         add(c.canClose, Entry::CloseSoftware);
+        add(c.showDetails, Entry::Details); // (on top, not in Info…: it's the one most used)
         add(c.hasId && !c.get, Entry::Favourite);
         add(true, Entry::Rearrange);
         add(c.installed, Entry::MoveTo);

@@ -4,6 +4,9 @@ Design: [docs/superpowers/specs/2026-11-26-plus-menu-consolidation-design.md](su
 The + sheet used to be one long list (about 20 buttons, the last ones never fully
 shown). It now has a short top level and four groups that open in the same sheet.
 B goes back one level; + and X close from any level; touching outside the card closes.
+B on anything a + button opens (a list, a picture picker, the details panel, the keyboard)
+comes back to the + sheet, on the button that opened it, and B in a list opened from another
+list goes back to that list. B never closes more than one step.
 
 ## Where each old entry went
 
@@ -11,13 +14,14 @@ B goes back one level; + and X close from any level; touching outside the card c
 |---|---|
 | Play / Resume / Open / Get, Update to {version} | Top level, first |
 | Close software (SwitchU) | Top level |
+| Details | Top level |
 | Favourite / Unfavourite | Top level |
 | Move | Top level, renamed **Rearrange** |
 | Delete | Top level, last |
 | Move to custom page, Add to custom page, Move to {page} | **Move to…** |
 | Remove from this page / Put back on its page | **Move to…** |
 | Rename, Card picture, Background picture, Title picture, Icon picture, Show as a full card / icon, Download new pictures | **Appearance…** |
-| Details, About this game, Note, Copy its music | **Info…** |
+| About this game, Note, Copy its music | **Info…** |
 | Search games, Put on the panel button (SwitchU), Hide this card | **More…** |
 
 A group with only one entry is not shown as a group; its entry sits on the top level.

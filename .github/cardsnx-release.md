@@ -24,7 +24,7 @@ Put `CardsNX.nro` in `sdmc:/switch/CardsNX/` (HomeNX installs it there for you).
 |---|---|
 | Left / Right | Move between cards |
 | A | Play, or open the app |
-| + or X | Options: Play, Rearrange, Move to…, Appearance…, Info…, More…, Delete (.nro), Close software |
+| + or X | Options: Play, Details, Rearrange, Move to…, Appearance…, Info…, More…, Delete (.nro), Close software. B goes back one step |
 | L | Discord |
 | R | Quick Settings (Wi-Fi, Airplane mode, brightness, volumes, the song, power) |
 | ZL / ZR | Games / Homebrew / Nintendo |
