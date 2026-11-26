@@ -75,10 +75,10 @@ cycling. The existing Grid view / Cross view toggles stay and agree with it.
 
 ## 5. Channels
 
-- A grid style: 4 x 3 square tiles a page (150 px; crimson: "should be square"), rounded 22 px, white frame,
+- A grid style: 4 x 3 tiles a page, 16:9 (268 x 151), rounded 22 px, white frame,
   same paging, moving, touch and input as the Grid (the grid's cell becomes a width
   and a height).
-- A tile shows the game's icon art filling it (its middle, square);
+- A tile shows the game's icon art filling it (cropped to 16:9 from the middle);
   the chosen tile shows the game's background picture instead once it's loaded (it is
   loaded anyway for the screen behind), its name in a strip along its bottom, and
   grows 1.06 with the accent ring. No extra pictures are loaded for Channels.
