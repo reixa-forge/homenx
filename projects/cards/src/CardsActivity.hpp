@@ -530,6 +530,7 @@ private:
 
     // Popups and screens.
     void openMenu(std::string title, std::vector<MenuItem> items);
+    void closeMenu(); // m_menu cleared; what it showed fades out (the ghost)
     void openOptions();
     // The Music screen (the note in the bar, Music on the dots): a record that
     // turns, the song and its controls, the playlist, and the music's bars.
@@ -668,6 +669,8 @@ private:
     int m_optSel = 0;
     float m_optIn = 0.f;
     float m_optLevelIn = 1.f; // a level change in the open sheet: re-staggers the buttons only
+    float m_optOut = 0.f;     // 1 when the sheet closes -> 0 (it fades, taking no input)
+    void closeOptions();      // m_optOpen = false, fading out
     Game m_optGame;
     std::vector<MenuItem> m_optItems;
     plus::Level m_optLevel = plus::Level::Top; // the level shown: the top, or a group opened in the same sheet
@@ -993,6 +996,10 @@ private:
     std::function<void()> m_menuBack; // B: back to the list before (set after openMenu), else closed
     std::vector<MenuItem> m_menu;
     int m_menuSel = 0;
+    float m_menuOut = 0.f;              // 1 when the list closes -> 0: its ghost fades (no input)
+    std::vector<MenuItem> m_menuGhost;  // what the closing list draws
+    std::string m_menuGhostTitle;
+    bool m_menuKeepDim = false;         // opened from the + sheet: the backdrop stays dimmed (no flash)
     bool m_notifOpen = false;
     std::vector<std::pair<std::string, std::string>> m_notifRows; // title, detail
     std::string m_message;

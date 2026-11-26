@@ -1047,6 +1047,7 @@ bool CardsActivity::wantsFullRate() const {
                     m_sheetIn, m_sheetRowsIn, m_quickIn, m_powerIn, m_dotsIn, m_optIn, m_optLevelIn, m_pickIn, m_musicIn,
                     m_quickListIn})
         if (v < 1.f) return true;
+    if (m_optOut > 0.f || m_menuOut > 0.f) return true; // (closing: they fade down to 0)
     const float target = static_cast<float>(m_sels[m_page]);
     if (m_scroll != target) return true;
     if (m_locked && (m_lockIn < 1.f || m_unlockT >= 0.f)) return true;
@@ -2338,7 +2339,7 @@ void CardsActivity::toggleFavourite(const Game& game) {
 }
 
 void CardsActivity::jumpTo(int page, int index) {
-    m_menu.clear();
+    closeMenu();
     m_zone = Zone::Cards;
     m_crossSystem = false;
     if (page != m_page) {
@@ -3003,13 +3004,13 @@ void CardsActivity::leave(int index, float seconds, std::function<void()> then) 
     }
     m_leaveThen = std::move(then);
     closeTask();
-    m_menu.clear();
+    closeMenu();
     m_notifOpen = false;
     m_sheetOpen = false;
     m_quickOpen = false;
     m_powerOpen = false;
     m_dotsOpen = false;
-    m_optOpen = false;
+    closeOptions();
     m_pickOpen = false;
     m_musicOpen = false;
     m_moving = false;
@@ -3763,10 +3764,14 @@ bool CardsActivity::closeEverything() {
     m_powerOpen = false;
     m_dotsOpen = false;
     m_optOpen = false;
+    m_optOut = 0.f; // (all at once: nothing fades over the lock or the game)
     m_pickOpen = false;
     m_musicOpen = false;
     if (m_moving) finishMove(false);
     m_menu.clear();
+    m_menuOut = 0.f;
+    m_menuGhost.clear();
+    m_menuKeepDim = false;
     m_notifOpen = false;
     m_sheetOpen = false;
     m_quickOpen = false;
@@ -4492,12 +4497,29 @@ void CardsActivity::handleHome() {
 // ---------------------------------------------------------------- popups
 
 void CardsActivity::openMenu(std::string title, std::vector<MenuItem> items) {
+    if (m_optOpen || m_optOut > 0.f) m_menuKeepDim = true; // from the + sheet: one dim layer throughout
+    m_menuOut = 0.f; // (a list closing under it goes at once: no ghost under the new one)
+    m_menuGhost.clear();
     m_menuTitle = std::move(title);
     m_menu = std::move(items);
     m_menuBack = nullptr;
     m_menuSel = 0;
     m_menuIn = m_settings.motion ? 0.f : 1.f;
     m_audio.play("show_modal");
+}
+
+void CardsActivity::closeMenu() {
+    if (!m_menu.empty() && m_settings.motion) { // what it showed fades out, taking no input
+        m_menuGhost = std::move(m_menu);
+        m_menuGhostTitle = m_menuTitle;
+        m_menuOut = 1.f;
+    }
+    m_menu.clear();
+}
+
+void CardsActivity::closeOptions() {
+    if (m_optOpen) m_optOut = m_settings.motion ? 1.f : 0.f; // it fades, taking no input
+    m_optOpen = false;
 }
 
 // Plus (and the panel's "..."): what can be done with the chosen card.
@@ -4509,6 +4531,7 @@ void CardsActivity::openOptions() {
     m_optLevel = plus::Level::Top; // (a new sheet starts at the top, on its first entry)
     showOptionLevel(plus::Level::Top);
     m_optOpen = true;
+    m_optOut = 0.f;
     m_optIn = m_settings.motion ? 0.f : 1.f;
     m_optLevelIn = 1.f; // (the opening is m_optIn's stagger)
     m_audio.play("show_modal");
@@ -5512,14 +5535,14 @@ void CardsActivity::updateOptions() {
         return;
     }
     if (in.isDown(B::B) || in.isDown(B::Plus) || in.isDown(B::X)) {
-        m_optOpen = false;
+        closeOptions();
         m_audio.play("hide_modal");
         return;
     }
     if (in.isDown(B::A) && m_optSel >= 0 && m_optSel < n) {
         const MenuItem& item = m_optItems[(size_t)m_optSel];
         auto run = item.run;
-        if (!item.stay) m_optOpen = false; // (a group opens in the sheet)
+        if (!item.stay) closeOptions(); // (a group opens in the sheet)
         m_audio.play("activation");
         if (run) run();
     }
@@ -5534,22 +5557,23 @@ bool CardsActivity::optionsTouch() {
         if (optionRow(m_optItems.size(), i, 0.f, wide).contains(x, y)) {
             m_optSel = static_cast<int>(i);
             auto run = m_optItems[i].run;
-            if (!m_optItems[i].stay) m_optOpen = false; // (a group opens in the sheet)
+            if (!m_optItems[i].stay) closeOptions(); // (a group opens in the sheet)
             if (run) run();
             return true;
         }
     if (!kOptCard.contains(x, y)) {
-        m_optOpen = false;
+        closeOptions();
         m_audio.play("hide_modal");
     }
     return true;
 }
 
 void CardsActivity::drawOptions(nxui::Renderer& r) {
-    if (!m_optOpen) return;
-    const float a = easeOut(m_optIn);
+    if (!m_optOpen && m_optOut <= 0.f) return;
+    const float a = m_optOpen ? easeOut(m_optIn) : easeOut(m_optOut); // (closing: it fades, input gone)
     const float ring = 0.8f + 0.2f * std::sin(m_decoTime * 5.f);
-    r.drawRect({0.f, 0.f, 1280.f, 720.f}, nxui::Color(0.f, 0.f, 0.f, 0.5f * a));
+    if (m_optOpen || !m_menuKeepDim) // (closing into a list it opened: the list's backdrop is the one dim layer)
+        r.drawRect({0.f, 0.f, 1280.f, 720.f}, nxui::Color(0.f, 0.f, 0.f, 0.5f * a));
     const nxui::Rect card = scaled(kOptCard, 0.95f + 0.05f * easeOutBack(m_optIn));
     frost(r, card, 34.f, nxui::Color(0.08f, 0.09f, 0.13f, 0.86f * a));
     r.drawRoundedRectOutline(card, nxui::Color(1.f, 1.f, 1.f, 0.16f * a), 34.f, 1.5f);
@@ -8331,7 +8355,7 @@ void CardsActivity::updateBluetoothAudio(float dt) {
             if (m_btScanLeft <= 0.f) {
                 stopAudioScan();
                 if (m_btFound.empty()) {
-                    m_menu.clear();
+                    closeMenu();
                     say("Nothing found. Put it in pairing mode, then try again.");
                 }
             }
@@ -9228,7 +9252,7 @@ void CardsActivity::openPlayerList() {
                 say("This game isn't on the console.");
                 return;
             }
-            m_menu.clear();
+            closeMenu();
             if (page != m_page) {
                 m_sels[page] = index; // goToPage reads the selection after the page changes
                 goToPage(page, 0);
@@ -9349,12 +9373,12 @@ void CardsActivity::keepTextCachesSmall() {
 bool CardsActivity::updatePopup() {
     if (m_menu.empty()) return false;
     listInput(m_menu, m_menuSel, [this]() {
-        m_menu.clear();
+        closeMenu(); // (a list it opens clears the ghost)
         m_menuBack = nullptr;
     }, [this]() {
         auto back = std::move(m_menuBack); // (B: the list before, when there is one)
         m_menuBack = nullptr;
-        m_menu.clear();
+        closeMenu();
         if (back) back();
     });
     return true;
@@ -9590,7 +9614,7 @@ bool CardsActivity::handleTouch() {
         float rowH = 56.f;
         popupGeometry(m_menu.size(), box, rowH);
         if (!box.contains(x, y)) {
-            m_menu.clear();
+            closeMenu();
             m_audio.play("hide_modal");
             return true;
         }
@@ -9603,7 +9627,7 @@ bool CardsActivity::handleTouch() {
         const nxui::Rect r{box.x + 14.f, box.y + 66.f + rowH * static_cast<float>(shownRow), box.width - 28.f, rowH - 6.f};
         if (tapRow(item, r, r.x + r.width - 18.f - 150.f, 150.f) && item.run) {
             auto run = item.run;
-            if (!item.stay) m_menu.clear();
+            if (!item.stay) closeMenu();
             run();
         }
         return true;
@@ -10155,6 +10179,14 @@ void CardsActivity::onUpdate(float dt) {
 #ifdef SWITCHU_MENU
     step(m_newsIn, cards::motion::kSheetOpen);
 #endif
+    // Closing: 1 -> 0 (motion off: gone at once).
+    auto fade = [&](float& v, float seconds) { v = motion ? std::max(0.f, v - std::min(dt, 1.f / 30.f) / seconds) : 0.f; };
+    fade(m_optOut, cards::motion::kClose);
+    fade(m_menuOut, cards::motion::kClose);
+    if (m_menu.empty() && m_menuOut <= 0.f) { // the list has finished closing
+        m_menuGhost.clear();
+        m_menuKeepDim = false;
+    }
     const float target = static_cast<float>(sel());
     if (m_flingV != 0.f && !m_dragging && !gridOn() && !games().empty()) {
         // A flick: the row glides on, slowing (friction), the card under the
@@ -11141,11 +11173,14 @@ void CardsActivity::draw(nxui::Renderer& r) {
     }
     drawStep("draw: the menus");
     drawSheet(r);
+    // The + sheet closing into a list it opened fades under that list.
+    const bool optUnder = !m_optOpen && m_menuKeepDim;
+    if (optUnder) drawOptions(r);
     drawPopup(r); // (over Settings)
     drawTask(r);
     drawQuick(r);
     drawDots(r);
-    drawOptions(r);
+    if (!optUnder) drawOptions(r);
     drawPicker(r);
     drawGalleryAsk(r);
     drawLog(r);
@@ -14432,8 +14467,8 @@ void CardsActivity::drawRow(nxui::Renderer& r, MenuItem& item, const nxui::Rect&
 }
 
 void CardsActivity::drawPopup(nxui::Renderer& r) {
-    const float a = easeOut(m_menuIn);
     if (m_notifOpen) {
+        const float a = easeOut(m_menuIn);
         // A card for each: a bell on an accent tile, who or what, then the words.
         const float rows = static_cast<float>(std::max<size_t>(1, m_notifRows.size()));
         nxui::Rect box{kGearX + 38.f - 460.f, 84.f - 12.f * (1.f - a), 460.f, 60.f + rows * 74.f + 40.f};
@@ -14461,11 +14496,17 @@ void CardsActivity::drawPopup(nxui::Renderer& r) {
         else drawHints(r, box.x + box.width - 20.f, box.y + box.height - 22.f, {{"X", "Clear all"}, {"B", "Close"}}, a);
         return;
     }
-    if (m_menu.empty()) return;
-    r.drawRect({0.f, 0.f, 1280.f, 720.f}, nxui::Color(0.f, 0.f, 0.f, 0.42f * a));
+    // The list, or (just closed) its ghost fading out: drawn, never given input.
+    const bool ghost = m_menu.empty();
+    if (ghost && (m_menuOut <= 0.f || m_menuGhost.empty())) return;
+    std::vector<MenuItem>& menu = ghost ? m_menuGhost : m_menu; // (drawRow takes a row to change)
+    const std::string& title = ghost ? m_menuGhostTitle : m_menuTitle;
+    const float a = ghost ? easeOut(m_menuOut) : easeOut(m_menuIn);
+    // Opened from the + sheet: the backdrop at full dim from the first frame (the sheet fading under it draws none).
+    r.drawRect({0.f, 0.f, 1280.f, 720.f}, nxui::Color(0.f, 0.f, 0.f, 0.42f * (m_menuKeepDim && !ghost ? 1.f : a)));
     nxui::Rect base;
     float rowH = 56.f;
-    popupGeometry(m_menu.size(), base, rowH);
+    popupGeometry(menu.size(), base, rowH);
     const nxui::Rect box = scaled(base, 0.94f + 0.06f * a);
     r.drawRoundedRect({box.x - 4.f, box.y + 12.f, box.width + 8.f, box.height + 4.f}, nxui::Color(0.f, 0.f, 0.f, 0.3f * a),
                       32.f); // its shadow
@@ -14473,9 +14514,9 @@ void CardsActivity::drawPopup(nxui::Renderer& r) {
     r.drawRoundedRectOutline(box, nxui::Color(1.f, 1.f, 1.f, 0.14f * a), 28.f, 1.5f);
     r.drawGradientRect({box.x + 2.f, box.y + 2.f, box.width - 4.f, 60.f}, nxui::Color(1.f, 1.f, 1.f, 0.06f * a),
                        nxui::Color(1.f, 1.f, 1.f, 0.f)); // a sheen
-    r.drawText(fit(m_fLabel, m_menuTitle, box.width - 48.f), {box.x + 26.f, box.y + 22.f}, &m_fLabel, kWhite.withAlpha(a));
+    r.drawText(fit(m_fLabel, title, box.width - 48.f), {box.x + 26.f, box.y + 22.f}, &m_fLabel, kWhite.withAlpha(a));
     // The rows as one grouped list: a glass block, hairlines between them.
-    const size_t n = m_menu.size(), shown = std::min(n, kPopupRows), top = popupTop(n, m_menuSel);
+    const size_t n = menu.size(), shown = std::min(n, kPopupRows), top = popupTop(n, m_menuSel);
     r.drawRoundedRect({box.x + 14.f, box.y + 62.f, box.width - 28.f, rowH * static_cast<float>(shown) + 2.f},
                       nxui::Color(1.f, 1.f, 1.f, 0.05f * a), 18.f);
     for (size_t i = top; i < top + shown; ++i) {
@@ -14483,11 +14524,11 @@ void CardsActivity::drawPopup(nxui::Renderer& r) {
         const int at = static_cast<int>(i);
         if (i + 1 < n && at != m_menuSel && at + 1 != m_menuSel)
             r.drawRect({row.x + 16.f, row.y + row.height + 2.5f, row.width - 32.f, 1.f}, nxui::Color(1.f, 1.f, 1.f, 0.08f * a));
-        drawRow(r, m_menu[i], row, at == m_menuSel, a, false);
+        drawRow(r, menu[i], row, at == m_menuSel, a, false);
     }
     // The keys, the chosen row's own too (X / Y) where it has them.
     std::vector<std::pair<const char*, const char*>> keys;
-    const MenuItem* on = m_menuSel >= 0 && m_menuSel < static_cast<int>(n) ? &m_menu[(size_t)m_menuSel] : nullptr;
+    const MenuItem* on = m_menuSel >= 0 && m_menuSel < static_cast<int>(n) ? &menu[(size_t)m_menuSel] : nullptr;
     if (!on || on->kind != MenuItem::Info) keys.push_back({"A", on && on->aHint ? on->aHint : "Choose"});
     if (on && on->onX) keys.push_back({"X", on->xHint ? on->xHint() : "X"});
     if (on && on->onY) keys.push_back({"Y", on->yHint ? on->yHint() : "Y"});
