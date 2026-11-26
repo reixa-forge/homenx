@@ -1066,7 +1066,9 @@ static void startSleepSequence(const char* source) {
     }
     noteSleep('S');
     pushNotification(smi::MenuMessage::SleepSequence);
+    switchu::FileLog::log("[power] menu notified; committing SD before sleep");
     switchu::commitSdCard("sleep");
+    switchu::FileLog::log("[power] SD commit returned");
     svcSleepThread(50'000'000ULL);
     if (lock_screen::enabled() && daemon::app::isRunning()) {
         // Discard AM's cached game transition image. This changes no foreground
@@ -1074,8 +1076,9 @@ static void startSleepSequence(const char* source) {
         const Result captureRc = appletInvalidateTransitionLayer();
         switchu::FileLog::log("[power] clear game transition before sleep rc=0x%X", captureRc);
     }
+    switchu::FileLog::logCommit("[power] calling StartSleepSequence");
     const Result rc = appletStartSleepSequence(true);
-    switchu::FileLog::log("[power] StartSleepSequence rc=0x%X", rc);
+    switchu::FileLog::log("[power] StartSleepSequence rc=0x%X", rc); // no SD commit while AM enters sleep
     if (R_FAILED(rc)) {
         revealWakeDisplay();
         pushNotification(smi::MenuMessage::WakeUp);
@@ -1358,7 +1361,7 @@ static bool handleAppletMessages() {
 
         case 26:
         {
-        switchu::FileLog::log("[ae] -> Wakeup");
+        switchu::FileLog::logCommit("[ae] -> Wakeup");
         noteSleep('W');
         if (g_wakeCovered) g_wakeCoverDeadline = armGetSystemTick() + armNsToTicks(8'000'000'000ULL);
         if (lock_screen::enabled()) {
