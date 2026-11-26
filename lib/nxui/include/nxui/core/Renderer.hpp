@@ -121,14 +121,6 @@ public:
     void drawTextureRounded(const Texture* tex, const Rect& dest, float radius, const Color& tint = Color::white());
     void drawTextureSubRounded(const Texture* tex, const Rect& src, const Rect& dest,
                                float radius, const Color& tint = Color::white());
-    // A picture on a four-cornered shape with vertical sides (corners TL, TR, BR,
-    // BL), as a picture turned away in 3D: the edges' heights stand for their
-    // depth, so the picture is spread perspective-correct across it (cut into
-    // `strips` strips; it doesn't bend along a diagonal). uv: the part of the
-    // picture, 0..1. tex null: the shape in plain colour. top / bottom: the tint
-    // along its top and its bottom (a fading reflection: the same, alpha to 0).
-    void drawTextureQuad(const Texture* tex, const Vec2 (&corners)[4], const Rect& uv,
-                         const Color& top, const Color& bottom, int strips = 12);
     void drawText(const std::string& text, const Vec2& pos, Font* font, const Color& color, float scale = 1.f);
 
     /// GPU→CPU readback of the last presented framebuffer. See GpuDevice.

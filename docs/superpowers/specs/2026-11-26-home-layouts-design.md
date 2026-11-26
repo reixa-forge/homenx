@@ -2,7 +2,9 @@
 
 Source: crimson, project thread 2026-11-26 ("research the most used and most loved
 menu types and add these menus to the options to switch between… things like 3D
-flow"), then the decision card: **Flow, Wheel, Channels**.
+flow"), then the decision card: **Flow, Wheel, Channels**. After the first console
+test crimson dropped Flow ("flow isnt nice") for a **Deck** (Steam Deck style)
+layout: section 3 now describes Deck; Flow's notes are kept below for the record.
 
 ## 1. Research summary
 
@@ -37,19 +39,20 @@ glass, accent and fonts; no third-party art or names.
 Settings > Look gets one **Home layout** choice row (all six, left / right), and Y keeps
 cycling. The existing Grid view / Cross view toggles stay and agree with it.
 
-## 3. Flow
+## 3. Deck (replaces Flow)
 
-- The chosen cover faces you in the middle (x 640), 1.25x a card's size; the others
-  stand turned away on both sides, overlapping, each next one a step further out
-  and slightly darker; at most 5 a side drawn.
-- Turned covers are trapezoids (near edge full height, far edge 80%), drawn with a
-  new `nxui::Renderer::drawTextureQuad` (four corners, the quad cut into vertical
-  strips so the picture doesn't bend at the diagonal). A reflection under each cover:
-  the picture flipped, fading from 30% to 0 over a third of its height.
-- Same input as Cards: left / right / L / R / touch drag / fling / tap, the same
-  selection and `m_scroll`; turning glides with the scroll (no extra state).
-- The bottom panel, the top bar, Rearrange, launch animations and the + sheet work as
-  in Cards (they use `cardRect`, which returns each cover's bounding box).
+- A handheld-console library style: the chosen game's art is the screen's background
+  (as in every layout), a shade rises from the bottom, and the game's name (large)
+  and details (last played / author, play time) sit over a row of portrait capsules
+  along the bottom (176 x 250, 20 apart, standing on y 650).
+- The chosen capsule is the first in the row at x 80, 1.14x larger, with the ring; the
+  ones before it go off to the left (one shows, cut off). Pure geometry:
+  `deckSlot(rel)`; the capsules are flat, so the card row's drawing, glass apps,
+  badges, Rearrange, launches and touch all work unchanged through `cardRect`.
+- Same input as Cards; no bottom panel (Down does nothing).
+
+(Flow, dropped: covers in 3D on trapezoids via an nxui perspective quad, with
+reflections. Removed along with that renderer addition.)
 
 ## 4. Wheel
 

@@ -1,26 +1,25 @@
 #pragma once
 // The home screen's layouts (Y cycles them; Settings > Look > Home layout) and
-// the geometry of the three that share the card row's model: Flow and Wheel
+// the geometry of the three that share the card row's model: Deck and Wheel
 // (the row's selection and scroll, laid out differently) and Channels (a grid
 // style). Pure (no UI): CardsActivity draws what these place.
 
 #include "Settings.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 
 namespace cards::layout {
 
-enum class Layout : int { Cards, Flow, Wheel, Grid, Channels, Cross, Count };
+enum class Layout : int { Cards, Deck, Wheel, Grid, Channels, Cross, Count };
 
-constexpr int kRowCards = 0, kRowFlow = 1, kRowWheel = 2, kRowStyles = 3;
+constexpr int kRowCards = 0, kRowDeck = 1, kRowWheel = 2, kRowStyles = 3;
 constexpr int kGridIcons = 0, kGridChannels = 1, kGridStyles = 2;
 
 inline Layout current(const Settings& s) {
     if (s.xmbView) return Layout::Cross;
     if (s.gridView) return s.gridStyle == kGridChannels ? Layout::Channels : Layout::Grid;
-    return s.rowStyle == kRowFlow ? Layout::Flow : s.rowStyle == kRowWheel ? Layout::Wheel : Layout::Cards;
+    return s.rowStyle == kRowDeck ? Layout::Deck : s.rowStyle == kRowWheel ? Layout::Wheel : Layout::Cards;
 }
 
 // Only the fields that say which layout it is change (the grid's size, the
@@ -40,12 +39,12 @@ inline void apply(Settings& s, Layout l) {
     default:
         s.xmbView = false;
         s.gridView = false;
-        s.rowStyle = l == Layout::Flow ? kRowFlow : l == Layout::Wheel ? kRowWheel : kRowCards;
+        s.rowStyle = l == Layout::Deck ? kRowDeck : l == Layout::Wheel ? kRowWheel : kRowCards;
         return;
     }
 }
 
-// Y: Cards, Flow, Wheel, Grid, Channels, Cross, and round again.
+// Y: Cards, Deck, Wheel, Grid, Channels, Cross, and round again.
 inline Layout next(Layout l, int step = 1) {
     constexpr int n = static_cast<int>(Layout::Count);
     return static_cast<Layout>(((static_cast<int>(l) + step) % n + n) % n);
@@ -53,7 +52,7 @@ inline Layout next(Layout l, int step = 1) {
 
 inline const char* name(Layout l) {
     switch (l) {
-    case Layout::Flow: return "Flow";
+    case Layout::Deck: return "Deck";
     case Layout::Wheel: return "Wheel";
     case Layout::Grid: return "Grid";
     case Layout::Channels: return "Channels";
@@ -62,58 +61,41 @@ inline const char* name(Layout l) {
     }
 }
 
-inline bool rowModel(Layout l) { return l == Layout::Cards || l == Layout::Flow || l == Layout::Wheel; }
+inline bool rowModel(Layout l) { return l == Layout::Cards || l == Layout::Deck || l == Layout::Wheel; }
 inline bool gridModel(Layout l) { return l == Layout::Grid || l == Layout::Channels; }
 
-struct Point { float x, y; };
-
-// ---------------------------------------------------------------- Flow
-// The chosen cover faces you in the middle; the others stand turned away on
-// both sides. rel: the cover's index minus the row's scroll (fractional while
-// it glides). A slot's corners go top-left, top-right, bottom-right,
-// bottom-left; a turned cover's outer edge is shorter (it's further away).
-namespace flow {
-constexpr float kCentreX = 640.f, kMidY = 305.f;
-constexpr float kW = 276.f, kH = 391.f;       // the front cover (1.15 of a card)
-constexpr float kSideH = 0.86f;               // a turned cover's near edge, of kH
-constexpr float kFar = 0.80f;                 // its far edge, of its near edge
-constexpr float kSideW = 0.46f;               // its width on screen, of kW
-constexpr float kGap = 205.f, kPitch = 88.f;  // the first side cover's middle from the centre; then each next one
-constexpr float kShown = 5.5f;                // covers further than this aren't drawn
-constexpr float kSwipePitch = 140.f;          // touch: pixels dragged per cover
+// ---------------------------------------------------------------- Deck
+// A handheld-console library style: the chosen game's art fills the screen
+// (the background), its name and details sit over a row of portrait capsules
+// along the bottom, and the chosen capsule is the first in the row, larger;
+// the ones before it go off to the left. rel: the capsule's index minus the
+// row's scroll (fractional while it glides).
+namespace deck {
+constexpr float kLeft = 80.f;                 // the chosen capsule's left edge
+constexpr float kW = 176.f, kH = 250.f;       // a capsule
+constexpr float kGrow = 1.14f;                // the chosen one
+constexpr float kPitch = 196.f;               // one capsule to the next (20 apart)
+constexpr float kBottom = 650.f;              // the row's bottom edge
+constexpr float kTitleY = 300.f, kInfoY = 334.f; // the chosen game's name and details, over the row
 }
 
-struct FlowSlot {
-    std::array<Point, 4> corners; // TL, TR, BR, BL
-    float turn = 0.f;             // -1 turned (on the left) .. 0 facing you .. 1 turned (on the right)
-    float shade = 0.f;            // 0..0.6 darker the further it is
+struct DeckSlot {
+    float x = 0.f, y = 0.f, w = 0.f, h = 0.f;
+    float chosen = 0.f; // 1 the chosen one .. 0 the rest
     bool shown = false;
-    // Its box on screen (touch, the rings, the launch).
-    float left() const { return std::min(corners[0].x, corners[3].x); }
-    float right() const { return std::max(corners[1].x, corners[2].x); }
-    float top() const { return std::min(corners[0].y, corners[1].y); }
-    float bottom() const { return std::max(corners[2].y, corners[3].y); }
 };
 
-inline FlowSlot flowSlot(float rel) {
-    using namespace flow;
-    FlowSlot s;
-    const float a = std::abs(rel);
-    s.shown = a <= kShown;
-    const float side = rel < 0.f ? -1.f : 1.f;
-    const float t = std::min(a, 1.f);                         // facing -> turned, over the first step
-    const float smooth = t * t * (3.f - 2.f * t);
-    s.turn = side * smooth;
-    const float cx = kCentreX + side * (kGap * smooth + kPitch * std::max(0.f, a - 1.f));
-    const float w = kW + (kW * kSideW - kW) * smooth;
-    const float hNear = kH + (kH * kSideH - kH) * smooth;
-    const float hFar = hNear * (1.f + (kFar - 1.f) * smooth);
-    const float x0 = cx - w * 0.5f, x1 = cx + w * 0.5f;
-    // Turned away on the left: the right edge is the near one; on the right, the left.
-    const float hL = side < 0.f ? hFar : hNear, hR = side < 0.f ? hNear : hFar;
-    s.corners = {Point{x0, kMidY - hL * 0.5f}, Point{x1, kMidY - hR * 0.5f}, Point{x1, kMidY + hR * 0.5f},
-                 Point{x0, kMidY + hL * 0.5f}};
-    s.shade = std::min(0.6f, 0.18f * smooth + 0.08f * std::max(0.f, a - 1.f));
+inline DeckSlot deckSlot(float rel) {
+    using namespace deck;
+    DeckSlot s;
+    s.chosen = std::clamp(1.f - std::abs(rel), 0.f, 1.f);
+    const float grow = 1.f + (kGrow - 1.f) * s.chosen;
+    s.w = kW * grow;
+    s.h = kH * grow;
+    // The ones after the chosen one make room for its growth (20 px apart either side).
+    s.x = kLeft + rel * kPitch + kW * (kGrow - 1.f) * std::clamp(rel, 0.f, 1.f);
+    s.y = kBottom - s.h;
+    s.shown = s.x < 1290.f && s.x + s.w > -10.f;
     return s;
 }
 

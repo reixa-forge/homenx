@@ -223,14 +223,15 @@ private:
     bool morphing() const { return m_gridIn > 0.f && m_gridIn < 1.f; }
     int m_forceLayout = -1; // (cardRect: either layout's place, while they morph)
     // The row's other looks (Settings.rowStyle, HomeLayout.hpp): the same games,
-    // selection and scroll, laid out as a 3D cover flow or a wheel; and the grid's
+    // selection and scroll, laid out as a Deck (a handheld library) or a wheel; and the grid's
     // Channels style. Y / Settings > Look > Home layout choose (setLayout).
-    bool flowOn() const { return !gridOn() && !m_settings.xmbView && m_settings.rowStyle == layout::kRowFlow; }
+    bool deckOn() const { return !gridOn() && !m_settings.xmbView && m_settings.rowStyle == layout::kRowDeck; }
     bool wheelOn() const { return !gridOn() && !m_settings.xmbView && m_settings.rowStyle == layout::kRowWheel; }
     bool channelsOn() const { return gridOn() && m_settings.gridStyle == layout::kGridChannels; }
     float rowPitch() const; // touch: pixels dragged per card (the wheel: down, the rest: across)
     void setLayout(layout::Layout to);
-    void drawFlow(nxui::Renderer& r);
+    void drawDeckInfo(nxui::Renderer& r, float alpha); // Deck: the chosen game's name and details over the row
+    bool noPanel() const { return wheelOn() || deckOn(); } // (their names and details are drawn their own way)
     void drawWheel(nxui::Renderer& r, bool rows); // false: the cover (under the glass); true: the rows (glass, over it)
     void toggleGrid();
     // The cross view (Y's third look): the pages side by side along the top,
