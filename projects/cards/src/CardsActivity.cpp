@@ -1615,11 +1615,17 @@ void CardsActivity::worker(int index) {
                 // icon: its title picture, or the plain icon when there won't be one (title
                 // pictures off, an app) -- a plain icon kept while the search was busy or
                 // offline stayed for good, and the title pictures never came (build 174).
-                const bool forGood = job.what == kCard ? done.kind == ArtKind::Grid || done.kind == ArtKind::Box
-                                                             || (done.kind == ArtKind::Banner && !m_boxArt.load())
-                                       : job.what == kIcon ? !done.again && (done.kind == ArtKind::Title || !m_titleArt
-                                                                             || (job.game.homebrew && !forwarder))
-                                                           : done.kind == ArtKind::Banner;
+                // An app's own icon as its card or background (Library: no other is looked for,
+                // unless one is chosen, which forgets these) is for good too: it was read and
+                // decoded from the .nro each time it scrolled in (from upstream aa7ec35).
+                const bool appIcon = job.game.homebrew && done.kind == ArtKind::Icon
+                                  && (job.what == kBackground || (job.what == kCard && !job.game.fullCard));
+                const bool forGood = appIcon
+                                  || (job.what == kCard ? done.kind == ArtKind::Grid || done.kind == ArtKind::Box
+                                                              || (done.kind == ArtKind::Banner && !m_boxArt.load())
+                                      : job.what == kIcon ? !done.again && (done.kind == ArtKind::Title || !m_titleArt
+                                                                            || (job.game.homebrew && !forwarder))
+                                                          : done.kind == ArtKind::Banner);
                 if (!shown.empty() && forGood) {
                     writeShown(shown, done.rgba, w, h, done.kind);
                     if (job.what == kCard) {
