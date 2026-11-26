@@ -869,6 +869,31 @@ void Renderer::drawTexture(const Texture* tex, const Rect& dest, const Color& ti
     addQuad(dest.x, dest.y, dest.right(), dest.bottom(), 0, 0, 1, 1, tint);
 }
 
+void Renderer::drawTextureQuad(const Texture* tex, const Vec2 (&c)[4], const Rect& uv,
+                               const Color& top, const Color& bottom, int strips) {
+    strips = std::clamp(strips, 1, 64);
+    bindTexture(tex ? tex->descriptorSlot() : -1);
+    // A point s (0..1) along the width: on screen it's linear; in the picture
+    // it's weighted by depth (1 / an edge's height is its distance).
+    const float hL = std::max(1e-3f, c[3].y - c[0].y), hR = std::max(1e-3f, c[2].y - c[1].y);
+    auto lerp = [](const Vec2& a, const Vec2& b, float s) { return Vec2{a.x + (b.x - a.x) * s, a.y + (b.y - a.y) * s}; };
+    auto u = [&](float s) { return uv.x + uv.width * (s * hR / ((1.f - s) * hL + s * hR)); };
+    for (int k = 0; k < strips; ++k) {
+        if (m_vtxCount + 6 > GpuDevice::MAX_VERTICES) flush();
+        const float s0 = static_cast<float>(k) / static_cast<float>(strips);
+        const float s1 = static_cast<float>(k + 1) / static_cast<float>(strips);
+        const Vec2 t0 = lerp(c[0], c[1], s0), t1 = lerp(c[0], c[1], s1);
+        const Vec2 b0 = lerp(c[3], c[2], s0), b1 = lerp(c[3], c[2], s1);
+        const float u0 = u(s0), u1 = u(s1), v0 = uv.y, v1 = uv.y + uv.height;
+        addVertex(t0.x, t0.y, u0, v0, top);
+        addVertex(t1.x, t1.y, u1, v0, top);
+        addVertex(b1.x, b1.y, u1, v1, bottom);
+        addVertex(t0.x, t0.y, u0, v0, top);
+        addVertex(b1.x, b1.y, u1, v1, bottom);
+        addVertex(b0.x, b0.y, u0, v1, bottom);
+    }
+}
+
 void Renderer::drawTextureSub(const Texture* tex, const Rect& src, const Rect& dest, const Color& tint) {
     if (!tex) return;
     float tw = (float)tex->width(), th = (float)tex->height();

@@ -53,6 +53,8 @@ struct Settings {
     bool bgMotion = true;     // the background art drifts
     bool gridView = false;    // Y: SwitchU's Wii U grid of icons instead of the card row
     bool xmbView = false;     // Y's third: the cross view (pages along the top, the page's games in a list)
+    int rowStyle = 0;         // the row's look (no grid, no cross view): 0 cards, 1 flow, 2 wheel (HomeLayout.hpp)
+    int gridStyle = 0;        // the grid's look: 0 icons, 1 channels
     int startPage = 0;        // (old: the page order's first is where it opens now)
     std::vector<int> pageOrder = {0, 1, 2, 3}; // the pages in order: 0 games, 1 homebrew, 2 Nintendo, 3 media, then custom pages
     int lastPage = -1; // the custom page something was started from: back there afterwards
@@ -217,6 +219,8 @@ struct Settings {
             bgMotion = j.value("bgMotion", bgMotion);
             gridView = j.value("gridView", gridView);
             xmbView = j.value("xmbView", xmbView);
+            rowStyle = std::clamp(j.value("rowStyle", rowStyle), 0, 2);
+            gridStyle = std::clamp(j.value("gridStyle", gridStyle), 0, 1);
             startPage = j.value("startPage", startPage);
             pageOrder = j.value("pageOrder", pageOrder);
             customPages.clear();
@@ -369,6 +373,8 @@ struct Settings {
         j["crossPlusDetails"] = crossPlusDetails;
         j["crossStyle"] = crossStyle;
         j["gridLayout"] = gridLayout;
+        j["rowStyle"] = rowStyle;
+        j["gridStyle"] = gridStyle;
         j["gridCursorColour"] = gridCursorColour;
         j["gridPill"] = gridPill;
         j["gridDots"] = gridDots;
