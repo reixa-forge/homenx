@@ -30,6 +30,7 @@ Put `CardsNX.nro` in `sdmc:/switch/CardsNX/` (HomeNX installs it there for you).
 | ZL / ZR | Games / Homebrew / Nintendo |
 | Up / Down | Top bar and panel buttons |
 | − | Notifications |
+| Y | Home layout: Cards, Flow (3D covers), Wheel, Grid, Channels, Cross view (also Settings > Look > Home layout) |
 
 **Rearrange:** + > Rearrange, then Left/Right carries the card. A puts it down, B puts it back. Your order is kept as "My Order".
 

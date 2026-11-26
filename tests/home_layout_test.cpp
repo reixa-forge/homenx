@@ -94,6 +94,9 @@ int main()
         assert(near(wheelSlot(4.f).scale, 0.7f) && near(wheelSlot(4.f).alpha, 0.25f));
         assert(!wheelSlot(4.5f).shown && !wheelSlot(-5.f).shown);
         assert(wheelSlot(4.4f).alpha < wheelSlot(4.f).alpha);
+        // The cover on the left stays clear of the rows, and on screen with its two lines under it.
+        assert(wheel::kCoverX + wheel::kCoverW + 40.f < wheel::kX);
+        assert(wheel::kCoverY > 90.f && wheel::kCoverY + wheel::kCoverH + 80.f < 720.f);
     }
     // Channels: four wide tiles fit across with their gaps; the crop is 16:9 and centred.
     {

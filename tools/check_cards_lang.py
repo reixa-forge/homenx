@@ -5,7 +5,7 @@ python tools/check_cards_lang.py"""
 import pathlib, re, sys
 
 root = pathlib.Path(__file__).resolve().parent.parent
-src = "".join(p.read_text(encoding="utf-8") for p in (root / "projects/cards/src").glob("*.cpp"))
+src = "".join(p.read_text(encoding="utf-8") for p in (root / "projects/cards/src").glob("*.[ch]pp"))
 src += (root / "projects/common/include/switchu/achievements.hpp").read_text(encoding="utf-8")  # (the milestones)
 lines = [l for l in (root / "projects/cards/romfs/lang.tsv").read_text(encoding="utf-8").splitlines() if l and l[0] != "#"]
 langs, rows = lines[0].split("\t"), [l.split("\t") for l in lines[1:]]

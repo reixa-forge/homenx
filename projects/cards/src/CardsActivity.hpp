@@ -1,6 +1,7 @@
 #pragma once
 #include "Audio.hpp"
 #include "GameMusic.hpp"
+#include "HomeLayout.hpp"
 #include "Library.hpp"
 #include "Mtp.hpp"
 #include "PlusMenu.hpp"
@@ -213,17 +214,28 @@ private:
     // the edge bump, a cursor that glides between tiles, the name pill and dots.
     // The grid's layout (Settings > Grid view > Layout): columns, rows, the tile and its spacing.
     int m_gridCols = 5, m_gridRows = 3, m_gridPer = 15;
-    float m_gridCell = 150.f, m_gridPadX = 20.f, m_gridPadY = 16.f, m_gridOriginX = 225.f, m_gridOriginY = 119.f;
+    float m_gridCellW = 150.f, m_gridCellH = 150.f; // a tile (Channels: wide)
+    float m_gridPadX = 20.f, m_gridPadY = 16.f, m_gridOriginX = 225.f, m_gridOriginY = 119.f;
     void applyGridLayout();
     bool gridOn() const { return m_forceLayout >= 0 ? m_forceLayout == 1 : m_settings.gridView; }
     // Y: the row and the grid morph into each other (IconGrid's layout morph,
     // 0.40 s inOutCubic): m_gridIn goes 0 (the row) to 1 (the grid) evenly.
     bool morphing() const { return m_gridIn > 0.f && m_gridIn < 1.f; }
     int m_forceLayout = -1; // (cardRect: either layout's place, while they morph)
+    // The row's other looks (Settings.rowStyle, HomeLayout.hpp): the same games,
+    // selection and scroll, laid out as a 3D cover flow or a wheel; and the grid's
+    // Channels style. Y / Settings > Look > Home layout choose (setLayout).
+    bool flowOn() const { return !gridOn() && !m_settings.xmbView && m_settings.rowStyle == layout::kRowFlow; }
+    bool wheelOn() const { return !gridOn() && !m_settings.xmbView && m_settings.rowStyle == layout::kRowWheel; }
+    bool channelsOn() const { return gridOn() && m_settings.gridStyle == layout::kGridChannels; }
+    float rowPitch() const; // touch: pixels dragged per card (the wheel: down, the rest: across)
+    void setLayout(layout::Layout to);
+    void drawFlow(nxui::Renderer& r);
+    void drawWheel(nxui::Renderer& r, bool rows); // false: the cover (under the glass); true: the rows (glass, over it)
     void toggleGrid();
     // The cross view (Y's third look): the pages side by side along the top,
     // then System; the chosen page's games in a list going down.
-    void cycleView();                 // Y: cards, grid, cross, cards
+    void cycleView();                 // Y: the next home layout (layout::next)
     void setCrossView(bool on);
     bool updateCross(float dt);       // its buttons (false: the bar has them)
     void drawCross(nxui::Renderer& r);
@@ -832,6 +844,7 @@ private:
     std::map<std::uint64_t, Art> m_art;
     float m_scroll = 0.f;  // the row's position, easing to sel()
     float m_repeat = 0.f;  // held left / right
+    float m_wheelRepeat = 0.f; // held up / down (the wheel)
     Zone m_zone = Zone::Cards;
     int m_topSel = 0, m_bottomSel = 0;
 

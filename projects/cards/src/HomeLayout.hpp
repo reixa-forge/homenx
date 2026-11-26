@@ -126,6 +126,8 @@ constexpr float kX = 680.f, kBend = 14.f;  // the chosen row's left edge; how fa
 constexpr float kW = 470.f, kH = 66.f;
 constexpr float kEnds = 4.f, kShown = 4.5f; // full fall-off at 4 steps; gone by 4.5
 constexpr int kJump = 8;                    // L / R: rows a jump
+// The chosen game's cover on the left, its name and when it was played under it.
+constexpr float kCoverX = 110.f, kCoverY = 118.f, kCoverW = 300.f, kCoverH = 425.f;
 }
 
 struct WheelSlot {
