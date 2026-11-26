@@ -1700,7 +1700,7 @@ CardsActivity::Admit CardsActivity::reserveArtwork(std::uint64_t bytes, bool sto
             const Art& a = it->second;
             if ((chosen && chosen->id == id) || (m_locked && id == m_lockGameId) || id == m_bgId || id == m_bgPrevId
                 || id == m_bgShowId || id == m_bgFromId) continue; // (the backgrounds on screen)
-            if (!(a.card || a.bg || a.icon || a.tile || (stockToo && a.stock))) continue;
+            if (!(a.card || a.bg || a.icon || (stockToo && (a.stock || a.tile)))) continue; // (Channels' tiles kept as icons are)
             if (victim == m_art.end() || a.lastAccess < victim->second.lastAccess) victim = it;
         }
         return victim;
@@ -1710,11 +1710,13 @@ CardsActivity::Admit CardsActivity::reserveArtwork(std::uint64_t bytes, bool sto
     if (stockGoes && !stock) victim = victimFor(true); // (a grid icon never pushes out another)
     if (victim == m_art.end()) return Admit::kNever;
     auto& a = victim->second;
-    a.card.reset(); a.bg.reset(); a.icon.reset(); a.tile.reset();
-    a.cardAsked = a.bgAsked = a.iconAsked = a.tileAsked = false;
+    a.card.reset(); a.bg.reset(); a.icon.reset();
+    a.cardAsked = a.bgAsked = a.iconAsked = false;
     if (stockGoes) {
         a.stock.reset();
         a.stockAsked = false;
+        a.tile.reset();
+        a.tileAsked = false;
     }
     m_evictWait = m_time + 0.1f; // (4 frames and a little)
     perfLine(stockGoes ? "[ART] evicted LRU grid icon; GPU bytes remain charged until retirement"
@@ -11380,7 +11382,8 @@ void CardsActivity::draw(nxui::Renderer& r) {
                          || m_pageIn < 1.f || m_bgFade < 1.f || m_intro < 1.f || m_leaving || m_moving
                          || focusRoot() != nullptr || m_gridSlideT < 1.f || m_gridDrag != 0.f || m_gridSettle != 0.f || m_gridBumpT >= 0.f
                          || !m_glides.empty() || m_moveJiggle > 0.f || std::abs(m_gridIn - (gridOn() ? 1.f : 0.f)) > 0.f
-                         || m_time - m_artArrivedAt < 0.4f;
+                         || m_time - m_artArrivedAt < 0.4f
+                         || (menuHide() > 0.f && menuHide() < 1.f); // (the games fading out under a menu's glass)
         if (moving || ++m_blurAge >= 60) {
             r.captureToOffscreen(false);
             r.applyBlur(2.5f, 2);
@@ -14273,19 +14276,29 @@ void CardsActivity::drawGrid(nxui::Renderer& r) {
             const nxui::Texture* pic = icon;
             const nxui::Texture* over = nullptr;
             float overIn = 1.f;
-            if (m_settings.channelArt == 0 && art && art->tile && art->tile->valid()
-                && (art->tileKind == ArtKind::Banner || art->tileKind == ArtKind::Grid)) {
-                const float in = easeOut((m_time - art->tileIn) / 0.35f);
-                if (in >= 1.f || !pic) pic = art->tile.get();
-                else {
-                    over = art->tile.get(); // (fading in over the icon)
-                    overIn = in;
+            if (m_settings.channelArt == 0 && art) {
+                const bool here = art->tile && art->tile->valid();
+                const bool wide = here && (art->tileKind == ArtKind::Banner || art->tileKind == ArtKind::Grid);
+                if (wide) { // its picture, fading in once, over the empty glass
+                    pic = nullptr;
+                    over = art->tile.get();
+                    overIn = easeOut((m_time - art->tileIn) / 0.35f);
+                    if (overIn >= 1.f) {
+                        pic = over;
+                        over = nullptr;
+                    }
+                } else if (!here && art->tileAsked) {
+                    pic = nullptr; // on its way: the empty glass, not the icon and then the picture
                 }
             }
             if (pic) {
                 const layout::Crop c = layout::wideCrop(static_cast<float>(pic->width()), static_cast<float>(pic->height()),
                                                         face.width / face.height);
                 r.drawTextureSubRounded(pic, {c.x, c.y, c.w, c.h}, face, rad - 3.f, kWhite.withAlpha(a));
+            } else if (over) {
+                // (fading in below)
+            } else if (m_settings.channelArt == 0 && art && art->tileAsked) {
+                // (on its way)
             } else {
                 const std::string name = fit(m_fBody, g.name, face.width - 24.f);
                 textMid(r, m_fBody, name, face.x + (face.width - measured(m_fBody, name).x) * 0.5f, face.y + face.height * 0.5f,
@@ -14812,13 +14825,22 @@ bool CardsActivity::launchDrawsCard() const {
     return m_leaving && m_leaveIndex >= 0 && (style == kZoom || style == kFlip);
 }
 
+// A menu over HOME (the + options, the details panel, a channel open): the games
+// behind fade away with it, as the top bar does for the details, instead of
+// showing (and changing) through it.
+float CardsActivity::menuHide() const {
+    const float opt = m_optOpen ? m_optIn : m_optOut;
+    return clamp01(std::max({opt, m_chanIn, m_crossInfoIn}));
+}
+
 float CardsActivity::othersAlpha() const {
-    if (!m_leaving) return 1.f;
+    const float shown = 1.f - easeOut(menuHide());
+    if (!m_leaving) return shown;
     switch (launchStyle()) {
         case kFade:
-        case kNoAnimation: return 1.f; // the screen dims over them
-        case kDive: return 1.f - smoothstep(0.45f, 0.85f, m_leaveT);
-        default: return 1.f - easeIn(m_leaveT / 0.5f);
+        case kNoAnimation: return shown; // the screen dims over them
+        case kDive: return shown * (1.f - smoothstep(0.45f, 0.85f, m_leaveT));
+        default: return shown * (1.f - easeIn(m_leaveT / 0.5f));
     }
 }
 

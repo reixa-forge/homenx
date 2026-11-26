@@ -532,7 +532,8 @@ private:
     enum LaunchStyle { kFade, kSplash, kZoom, kFlip, kDive, kNoAnimation, kLaunchStyles };
     int launchStyle() const;
     bool launchDrawsCard() const; // the chosen card is drawn by drawLaunch (zoom, flip)
-    float othersAlpha() const;    // the rest of the row while launching
+    float othersAlpha() const;
+    float menuHide() const; // a menu over HOME (+, the details, a channel): how far the games behind have gone (0..1)    // the rest of the row while launching
     void comeBack(); // it didn't happen: the screen as it was
     void handleHome();
     void askClose(); // X: close the open game or app, after asking
