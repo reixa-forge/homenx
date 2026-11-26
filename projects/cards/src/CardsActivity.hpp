@@ -653,7 +653,20 @@ private:
     bool m_pickCover = false, m_pickSaveCover = false; // the card's picture (not the title's)
     bool m_pickHero = false, m_pickSaveHero = false;   // the background's
     float m_pictureScale = 1.f; // 1.5 at 1080p: cards and icons are kept that much bigger
-    int backgroundW() const { return static_cast<int>(1280.f * m_pictureScale); } // backgrounds kept as wide as the screen really is
+    // A background (kBackground, kLaunch: the screen; kTile: Channels' biggest tile) is kept
+    // just big enough to cover that box at the screen's real pixels, never smaller: an
+    // ultra-wide hero (1920 x 620) cut to 1280 wide was 413 tall and stretched 1.75x up
+    // the 720 screen (the "not fully loaded" look). Only ever made smaller, never bigger.
+    // At most 1.5x the box's pixels (a 3840 x 1240 one would be 14 MB docked): just under covering then.
+    int coverW(int w, int h, bool tile) const {
+        const bool big = m_settings.channelTiles == 1;
+        const float bw = (tile ? (big ? 352.f : 268.f) : 1280.f) * m_pictureScale;
+        const float bh = (tile ? (big ? 198.f : 151.f) : 720.f) * m_pictureScale;
+        const float fw = static_cast<float>(std::max(1, w)), fh = static_cast<float>(std::max(1, h));
+        float k = std::min(1.f, std::max(bw / fw, bh / fh));
+        k = std::min(k, std::sqrt(1.5f * bw * bh / (fw * fh)));
+        return std::max(1, static_cast<int>(std::ceil(fw * k)));
+    }
     struct PlayStat {
         std::uint64_t id = 0, last = 0, seconds = 0;
         std::uint32_t launches = 0;

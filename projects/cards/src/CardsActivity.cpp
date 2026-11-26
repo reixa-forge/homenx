@@ -1520,9 +1520,11 @@ void CardsActivity::worker(int index) {
         const Game look = forLookup(job.game); // (renamed: its pictures are found by its real name)
         std::vector<std::uint8_t> data;
         // Covers, backgrounds and icons as shown last time (by size, box art, SteamGridDB or not).
-        const int shownW = job.what == kCard || job.what == kTile ? static_cast<int>(300.f * m_pictureScale)
-                         : job.what == kIcon     ? static_cast<int>(160.f * m_pictureScale)
-                                                 : backgroundW();
+        // (backgrounds and tiles: the screen's size in the name, "v2": kept by height too since)
+        const int shownW = job.what == kCard ? static_cast<int>(300.f * m_pictureScale)
+                         : job.what == kIcon ? static_cast<int>(160.f * m_pictureScale)
+                         : job.what == kTile ? static_cast<int>((m_settings.channelTiles == 1 ? 352.f : 268.f) * m_pictureScale)
+                                             : static_cast<int>(1280.f * m_pictureScale);
         // An NRO forwarder (an installed 05... title, no .nro path) looks up title pictures as
         // games do; ".if": its plain icon was kept for good under ".it" before (#13).
         const bool forwarder = job.game.homebrew && job.game.path.empty() && job.game.action.empty();
@@ -1530,7 +1532,7 @@ void CardsActivity::worker(int index) {
             (job.what == kCard || job.what == kBackground || job.what == kIcon || job.what == kTile) && job.game.action.empty()
                 ? shownPath(job.game.id, std::string(job.what == kCard ? (m_boxArt.load() ? "c1" : "c0")
                                              : job.what == kIcon ? (m_titleArt ? (forwarder ? "if" : "it") : "ip")
-                                             : job.what == kTile ? "t" : "b")
+                                             : job.what == kTile ? "t2" : "b2")
                                              + (key.empty() ? "" : "k") + "." + std::to_string(shownW))
                 : std::string();
         // A cover's very small copy: on the SD card (read for every card at once when HOME
@@ -1594,16 +1596,16 @@ void CardsActivity::worker(int index) {
             if (px) {
                 done.rgba.assign(px, px + static_cast<size_t>(w) * h * 4);
                 stbi_image_free(px);
-                // Backgrounds sharp: scaled to the screen's real width (1280, 1920 docked: a 1920 hero kept at
-                // 1280 was stretched 1.5x on the TV; before that, halving a 1280 banner to 640, or a
-                // box cover to 300, and stretching it was the blur); an icon a wash of its colours;
-                // cards as drawn.
-                const int maxW = job.what == kLaunch ? backgroundW()
+                // Backgrounds sharp: just big enough to cover the screen at its real pixels (coverW;
+                // before, a fixed width: ultra-wide heroes came out too short and were stretched,
+                // and earlier still halving a 1280 banner to 640 was the blur); an icon a wash of
+                // its colours; cards as drawn.
+                const int maxW = job.what == kLaunch ? coverW(w, h, false)
                                : job.what == kIcon || job.what == kStock ? static_cast<int>(160.f * m_pictureScale)
                                : job.what == kCard ? static_cast<int>(300.f * m_pictureScale) // drawn ~250 wide
                                : done.kind == ArtKind::Icon ? 32
-                               : job.what == kTile ? static_cast<int>(300.f * m_pictureScale) // Channels' tile, ~268 wide
-                                                            : backgroundW();
+                               : job.what == kTile ? coverW(w, h, true) // Channels' tile
+                                                   : coverW(w, h, false);
                 if (job.what == kBackground || job.what == kLaunch || job.what == kTile) scaleDown(done.rgba, w, h, maxW);
                 else if (job.what == kCard && done.kind == ArtKind::Icon) // an app's icon, on glass ~150 wide: a
                     scaleDown(done.rgba, w, h, static_cast<int>(160.f * m_pictureScale)); // 256 one took 4x the memory
