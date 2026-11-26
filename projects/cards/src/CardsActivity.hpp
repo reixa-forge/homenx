@@ -102,19 +102,35 @@ private:
     // The top bar's buttons, left to right.
     enum Top { kTopMenu, kTopDiscord, kTopSort, kTopUser, kTopPlayers, kTopBell, kTopMusic, kTopPower, kTopGear,
                kTopCount };
+    // kLaunch: the art at full size, for the launch; kStock: the console's own icon (the grid);
+    // kTile: the background picture at a card's size (Channels' tiles: a whole page of them).
+    enum What { kCard, kBackground, kIcon, kLaunch, kStock, kTile };
     struct Art {
         std::unique_ptr<nxui::Texture> card, bg, icon;
         ArtKind kind = ArtKind::Banner, bgKind = ArtKind::Banner, iconKind = ArtKind::Icon;
         bool cardAsked = false, bgAsked = false, iconAsked = false;
         std::unique_ptr<nxui::Texture> stock; // the console's own icon (the grid's tiles)
         bool stockAsked = false;
+        std::unique_ptr<nxui::Texture> tile;  // kTile
+        ArtKind tileKind = ArtKind::Banner;
+        bool tileAsked = false;
+        float tileIn = -10.f;
         float bgIn = -10.f;                    // when its background arrived (it sharpens in)
         std::uint64_t lastAccess = 0, selectedTick = 0;
         float cardIn = -10.f; // when it arrived (it fades in)
         float retryAt = 0.f;  // nothing came: asked again after this
+        // Whether a picture of this kind was asked for (kLaunch: none).
+        bool* askedFor(int what) {
+            switch (what) {
+            case kCard: return &cardAsked;
+            case kBackground: return &bgAsked;
+            case kIcon: return &iconAsked;
+            case kStock: return &stockAsked;
+            case kTile: return &tileAsked;
+            default: return nullptr;
+            }
+        }
     };
-    enum What { kCard, kBackground, kIcon, kLaunch, kStock }; // kLaunch: the art at full size, for the launch;
-                                                              // kStock: the console's own icon (the grid)
     // The lists, read on a thread (HOME shows last time's at once).
     struct Lists {
         std::vector<Game> games, homebrew;
@@ -294,7 +310,7 @@ private:
     float m_chanAt = 0.f;   // when it was last drawn (its steps go by the time since)
     bool channelScreenOn() const { return channelsOn() && m_settings.channelScreen && !m_moving; }
     void openChannel();
-    void closeChannel();
+    void closeChannel(bool quiet = false);
     void channelPageCatchUp();
     void channelStep(int dir);
     void channelStart();
@@ -633,6 +649,7 @@ private:
     bool m_pickCover = false, m_pickSaveCover = false; // the card's picture (not the title's)
     bool m_pickHero = false, m_pickSaveHero = false;   // the background's
     float m_pictureScale = 1.f; // 1.5 at 1080p: cards and icons are kept that much bigger
+    int backgroundW() const { return static_cast<int>(1280.f * m_pictureScale); } // backgrounds kept as wide as the screen really is
     struct PlayStat {
         std::uint64_t id = 0, last = 0, seconds = 0;
         std::uint32_t launches = 0;

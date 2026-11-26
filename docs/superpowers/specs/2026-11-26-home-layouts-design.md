@@ -46,7 +46,7 @@ cycling. The existing Grid view / Cross view toggles stay and agree with it.
 - Channels, A on a tile (or tapping the chosen one): a panel zooms out of the middle with
   the game's picture large (background picture, else cover, else icon), its name on a
   shade along the bottom, a silver disc turning over the picture's corner for a game
-  (its label, the game's icon, turns: nxui `drawTextureDisc` turns the texture coordinates
+  (the game's icon fills it and turns: nxui `drawTextureDisc` turns the texture coordinates
   inside the circle mask; the light on the disc stays put), and big Back and Play buttons.
   Left / Right choose, A presses, B back; L / R (and side arrows / taps) the channel before /
   after with a slide. HOME behind stays still (no page slide or sheen; nearly hidden) and
@@ -56,9 +56,14 @@ cycling. The existing Grid view / Cross view toggles stay and agree with it.
   tiers had thinned the frames a few seconds after the last press and the disc stuttered.
 - Settings > Wheel: on / off, Side (rows right or left, mirrored), Row size (0.85 / 1 / 1.15:
   scale and pitch; the fall-off goes by on-screen distance so all rows stay on screen).
+- Backgrounds are kept at the screen's real width (1280 handheld, 1920 docked; they were
+  capped at 1280 and stretched 1.5x on a TV). The channel screen falls back to the 96 px
+  thumbnail last.
 - Settings > Channels: on / off, Tiles (4 x 3 or 3 x 2), Tile picture (Background, the default:
-  the wide card art, asked for the whole page at card size, else the background, else the icon;
-  the same chosen or not, so nothing swaps on selection. Icon: the console's icon), Channel screen, Spinning disc,
+  a new picture kind, `kTile`: the background picture at card size (~450 px docked), asked for
+  the whole page and the pages either side and kept like the grid's icons, so a tile never swaps
+  pictures as the cursor moves (it had used the card art or the background, whichever was in,
+  and both come and go); the icon until it comes or when there's no wide one. Icon: the console's icon), Channel screen, Spinning disc,
   Every channel's name.
 - The scrolling light on the chosen card is masked to its rounded corners
   (nxui `beginRoundedMask` / `endRoundedMask`, the existing SDF shape mask).

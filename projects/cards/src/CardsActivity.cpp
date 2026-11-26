@@ -1519,16 +1519,17 @@ void CardsActivity::worker(int index) {
         const Game look = forLookup(job.game); // (renamed: its pictures are found by its real name)
         std::vector<std::uint8_t> data;
         // Covers, backgrounds and icons as shown last time (by size, box art, SteamGridDB or not).
-        const int shownW = job.what == kCard     ? static_cast<int>(300.f * m_pictureScale)
+        const int shownW = job.what == kCard || job.what == kTile ? static_cast<int>(300.f * m_pictureScale)
                          : job.what == kIcon     ? static_cast<int>(160.f * m_pictureScale)
-                                                 : 1280;
+                                                 : backgroundW();
         // An NRO forwarder (an installed 05... title, no .nro path) looks up title pictures as
         // games do; ".if": its plain icon was kept for good under ".it" before (#13).
         const bool forwarder = job.game.homebrew && job.game.path.empty() && job.game.action.empty();
         const std::string shown =
-            (job.what == kCard || job.what == kBackground || job.what == kIcon) && job.game.action.empty()
+            (job.what == kCard || job.what == kBackground || job.what == kIcon || job.what == kTile) && job.game.action.empty()
                 ? shownPath(job.game.id, std::string(job.what == kCard ? (m_boxArt.load() ? "c1" : "c0")
-                                             : job.what == kIcon ? (m_titleArt ? (forwarder ? "if" : "it") : "ip") : "b")
+                                             : job.what == kIcon ? (m_titleArt ? (forwarder ? "if" : "it") : "ip")
+                                             : job.what == kTile ? "t" : "b")
                                              + (key.empty() ? "" : "k") + "." + std::to_string(shownW))
                 : std::string();
         // A cover's very small copy: on the SD card (read for every card at once when HOME
@@ -1549,7 +1550,7 @@ void CardsActivity::worker(int index) {
                 if (!std::filesystem::exists(thumbPath(job.game.id), ec))
                     writeShown(thumbPath(job.game.id), done.small, done.sw, done.sh, done.kind);
             }
-        } else if (job.what == kBackground || job.what == kLaunch) {
+        } else if (job.what == kBackground || job.what == kLaunch || job.what == kTile) {
             data = backgroundArt(look, key, done.kind);
         } else if (job.what == kCard) {
             data = cardArt(look, key, m_boxArt.load(), done.kind);
@@ -1592,15 +1593,17 @@ void CardsActivity::worker(int index) {
             if (px) {
                 done.rgba.assign(px, px + static_cast<size_t>(w) * h * 4);
                 stbi_image_free(px);
-                // Backgrounds sharp: scaled to the screen's 1280 (halving a 1280 banner to 640, or a
+                // Backgrounds sharp: scaled to the screen's real width (1280, 1920 docked: a 1920 hero kept at
+                // 1280 was stretched 1.5x on the TV; before that, halving a 1280 banner to 640, or a
                 // box cover to 300, and stretching it was the blur); an icon a wash of its colours;
                 // cards as drawn.
-                const int maxW = job.what == kLaunch ? 1280
+                const int maxW = job.what == kLaunch ? backgroundW()
                                : job.what == kIcon || job.what == kStock ? static_cast<int>(160.f * m_pictureScale)
                                : job.what == kCard ? static_cast<int>(300.f * m_pictureScale) // drawn ~250 wide
                                : done.kind == ArtKind::Icon ? 32
-                                                            : 1280;
-                if (job.what == kBackground || job.what == kLaunch) scaleDown(done.rgba, w, h, maxW);
+                               : job.what == kTile ? static_cast<int>(300.f * m_pictureScale) // Channels' tile, ~268 wide
+                                                            : backgroundW();
+                if (job.what == kBackground || job.what == kLaunch || job.what == kTile) scaleDown(done.rgba, w, h, maxW);
                 else if (job.what == kCard && done.kind == ArtKind::Icon) // an app's icon, on glass ~150 wide: a
                     scaleDown(done.rgba, w, h, static_cast<int>(160.f * m_pictureScale)); // 256 one took 4x the memory
                 else shrink(done.rgba, w, h, maxW);
@@ -1645,7 +1648,7 @@ void CardsActivity::worker(int index) {
         if (took > 800.f) { // a picture that took long (the internet, mostly)
             char line[160];
             std::snprintf(line, sizeof(line), "%s for %.60s took %.0f ms%s",
-                          job.what == kBackground ? "background" : job.what == kIcon ? "icon" : "card", job.game.name.c_str(),
+                          job.what == kBackground ? "background" : job.what == kIcon ? "icon" : job.what == kTile ? "tile" : "card", job.game.name.c_str(),
                           took, done.rgba.empty() ? " (nothing came)" : "");
             perfLine(line);
         }
@@ -1687,7 +1690,7 @@ CardsActivity::Admit CardsActivity::reserveArtwork(std::uint64_t bytes, bool sto
             const Art& a = it->second;
             if ((chosen && chosen->id == id) || (m_locked && id == m_lockGameId) || id == m_bgId || id == m_bgPrevId
                 || id == m_bgShowId || id == m_bgFromId) continue; // (the backgrounds on screen)
-            if (!(a.card || a.bg || a.icon || (stockToo && a.stock))) continue;
+            if (!(a.card || a.bg || a.icon || a.tile || (stockToo && a.stock))) continue;
             if (victim == m_art.end() || a.lastAccess < victim->second.lastAccess) victim = it;
         }
         return victim;
@@ -1697,8 +1700,8 @@ CardsActivity::Admit CardsActivity::reserveArtwork(std::uint64_t bytes, bool sto
     if (stockGoes && !stock) victim = victimFor(true); // (a grid icon never pushes out another)
     if (victim == m_art.end()) return Admit::kNever;
     auto& a = victim->second;
-    a.card.reset(); a.bg.reset(); a.icon.reset();
-    a.cardAsked = a.bgAsked = a.iconAsked = false;
+    a.card.reset(); a.bg.reset(); a.icon.reset(); a.tile.reset();
+    a.cardAsked = a.bgAsked = a.iconAsked = a.tileAsked = false;
     if (stockGoes) {
         a.stock.reset();
         a.stockAsked = false;
@@ -1723,14 +1726,13 @@ void CardsActivity::wantArt() {
         if (i < 0 || i >= static_cast<int>(page.size())) return;
         Art& a = m_art[page[(size_t)i].id];
         if (used) a.lastAccess = ++m_artAccess; // (not a prefetch: the far pages looked the most recent)
-        bool& asked = what == kBackground ? a.bgAsked : what == kIcon ? a.iconAsked
-                    : what == kStock ? a.stockAsked : a.cardAsked;
+        bool& asked = *a.askedFor(what); // (what: never kLaunch here)
         if (asked) {
             if (used) order.emplace_back(page[(size_t)i].id, what);
             return;
         }
         if (m_time < a.retryAt) return;
-        if (what == kBackground && page[(size_t)i].action == "get") return; // a download glyph isn't a background
+        if ((what == kBackground || what == kTile) && page[(size_t)i].action == "get") return; // a download glyph isn't a background
         asked = true;
         if (used) order.emplace_back(page[(size_t)i].id, what);
         jobs.push_back({page[(size_t)i], what, m_artGen});
@@ -1768,8 +1770,8 @@ void CardsActivity::wantArt() {
         // pages either side; and the backgrounds of the tiles around the cursor.
         const int pg = s / m_gridPer;
         for (int i = pg * m_gridPer; i < (pg + 1) * m_gridPer; ++i) add(i, kStock);
-        if (channelsOn() && m_settings.channelArt == 0) // Channels' wide pictures: each tile's card art (small)
-            for (int i = pg * m_gridPer; i < (pg + 1) * m_gridPer; ++i) add(i, kCard);
+        if (channelsOn() && m_settings.channelArt == 0) // Channels' wide pictures, the page's, small
+            for (int i = pg * m_gridPer; i < (pg + 1) * m_gridPer; ++i) add(i, kTile);
         for (int d : {1, -1, m_gridCols, -m_gridCols}) add(s + d, kBackground);
         // Then every other page's, nearest pages first, when nothing else is
         // wanted (they're kept: SwitchU's grid shows its icons at once). Up to
@@ -1784,6 +1786,9 @@ void CardsActivity::wantArt() {
         for (int d = 1; d <= far; ++d)
             for (int p : {pg + d, pg - d})
                 for (int i = p * m_gridPer; i < (p + 1) * m_gridPer; ++i) add(i, kStock, false);
+        if (channelsOn() && m_settings.channelArt == 0) // (and the pages either side's channel pictures)
+            for (int p : {pg + 1, pg - 1})
+                for (int i = p * m_gridPer; i < (p + 1) * m_gridPer; ++i) add(i, kTile, false);
         if (jobs.size() > before) {
             std::lock_guard<std::mutex> lk(m_mu);
             for (size_t j = before; j < jobs.size(); ++j) m_idleJobs.push_back(std::move(jobs[j]));
@@ -1803,12 +1808,10 @@ void CardsActivity::wantArt() {
         for (auto it = m_jobs.begin(); it != m_jobs.end();) {
             auto found = std::find_if(page.begin(), page.end(), [&](const Game& g) { return g.id == it->game.id; });
             const int distance = found == page.end() ? 10000 : std::abs(static_cast<int>(found - page.begin()) - s);
-            const int radius = it->what == kCard ? 12 : it->what == kStock ? 2 * m_gridPer
+            const int radius = it->what == kCard ? 12 : it->what == kStock || it->what == kTile ? 2 * m_gridPer
                              : it->what == kBackground ? (gridOn() ? m_gridCols : 3) : 2;
             if (it->what != kLaunch && !(m_locked && it->game.id == m_lockGameId) && distance > radius) {
-                auto& a = m_art[it->game.id];
-                (it->what == kBackground ? a.bgAsked : it->what == kIcon ? a.iconAsked
-                 : it->what == kStock ? a.stockAsked : a.cardAsked) = false;
+                if (bool* asked = m_art[it->game.id].askedFor(it->what)) *asked = false;
                 it = m_jobs.erase(it);
             } else ++it;
         }
@@ -1837,9 +1840,7 @@ void CardsActivity::wantArt() {
         m_jobs.insert(at, std::make_move_iterator(first.begin()), std::make_move_iterator(first.end()));
         while (m_jobs.size() > 64) { // (the grid asks a page of icons at once)
             const auto& job = m_jobs.back();
-            auto& a = m_art[job.game.id];
-            (job.what == kBackground ? a.bgAsked : job.what == kIcon ? a.iconAsked
-             : job.what == kStock ? a.stockAsked : a.cardAsked) = false;
+            if (bool* asked = m_art[job.game.id].askedFor(job.what)) *asked = false;
             m_jobs.pop_back();
         }
     }
@@ -1933,17 +1934,14 @@ void CardsActivity::takeArt() {
         // then asked again): the first stays. The second replaced it and faded it
         // in again -- a cover that blinked out and back ("covers disappear").
         if (d.what == kCard && it->second.card && it->second.card->valid()) continue;
-        bool* asked = d.what == kBackground ? &it->second.bgAsked
-                    : d.what == kIcon       ? &it->second.iconAsked
-                    : d.what == kStock      ? &it->second.stockAsked
-                    : d.what == kCard       ? &it->second.cardAsked
-                                            : nullptr;
+        if (d.what == kTile && it->second.tile && it->second.tile->valid()) continue; // (the same: a tile never blinks)
+        bool* asked = it->second.askedFor(d.what);
         // (A grid icon is kept wherever it is: the grid's pages show at once.)
         if (d.what != kLaunch && d.what != kStock && d.id != selected && !(m_locked && d.id == m_lockGameId)) {
             const auto& page = games();
             const auto found = std::find_if(page.begin(), page.end(), [&](const Game& g) { return g.id == d.id; });
             const int distance = found == page.end() ? 10000 : std::abs(static_cast<int>(found - page.begin()) - sel());
-            if (distance > (d.what == kCard ? 12 : d.what == kStock ? 2 * m_gridPer
+            if (distance > (d.what == kCard ? 12 : d.what == kStock || d.what == kTile ? 2 * m_gridPer
                             : d.what == kBackground ? (gridOn() ? m_gridCols : 3) : 2)) {
                 if (asked) *asked = false;
                 continue;
@@ -1996,6 +1994,10 @@ void CardsActivity::takeArt() {
             }
         } else if (d.what == kStock) {
             it->second.stock = std::move(tex);
+        } else if (d.what == kTile) {
+            it->second.tile = std::move(tex);
+            it->second.tileKind = d.kind;
+            it->second.tileIn = m_time;
         } else if (d.what == kIcon) {
             it->second.icon = std::move(tex);
             it->second.iconKind = d.kind;
@@ -2274,6 +2276,7 @@ void CardsActivity::requeueArt() {
         if (!art.bg) art.bgAsked = false;
         if (!art.icon) art.iconAsked = false;
         if (!art.stock) art.stockAsked = false;
+        if (!art.tile) art.tileAsked = false;
     }
     wantArt();
 }
@@ -3766,9 +3769,8 @@ bool CardsActivity::closeEverything() {
     bool any = !m_menu.empty() || m_notifOpen || m_sheetOpen || m_moving || m_quickOpen || m_powerOpen || m_dotsOpen
             || m_optOpen || m_pickOpen || m_musicOpen || m_spQrOpen || m_chanOpen || m_task != Task::None;
     closeTask();
-    if (m_chanOpen) channelPageCatchUp();
-    m_chanOpen = false;
-    m_chanIn = 0.f;
+    closeChannel(true);
+    m_chanIn = 0.f; // (all at once, as the rest)
     if (m_spQrOpen) {
         m_spQrOpen = false;
 #ifdef SWITCHU_MENU
@@ -4882,10 +4884,11 @@ CardsActivity::MenuItem CardsActivity::plusItem(plus::Entry e, const Game& g) {
             forgetArt(id);
             auto it = m_art.find(id);
             if (it != m_art.end()) {
-                it->second.cardAsked = it->second.bgAsked = false;
+                it->second.cardAsked = it->second.bgAsked = it->second.tileAsked = false;
                 app().gpu().waitIdle(); // they may still be drawing
                 it->second.card.reset();
                 it->second.bg.reset();
+                it->second.tile.reset();
             }
             m_thumbs.erase(id); // (the old one's small copy)
             wantArt();
@@ -10758,6 +10761,8 @@ void CardsActivity::onUpdate(float dt) {
                 app().gpu().waitIdle(); // (it may still be drawing)
                 it->second.bg.reset();
                 it->second.bgAsked = false;
+                it->second.tile.reset(); // (Channels' small copy of it)
+                it->second.tileAsked = false;
             } else if (it != m_art.end() && m_pickSaveCover) { // the card's new picture
                 it->second.card.reset();
                 it->second.cardAsked = false;
@@ -12152,15 +12157,16 @@ void CardsActivity::channelPageCatchUp() {
     m_gridSlideT = 1.f;
 }
 
-void CardsActivity::closeChannel() {
+// quiet: given way to something else (a launch, Move, closeEverything), no sound of its own.
+void CardsActivity::closeChannel(bool quiet) {
     if (!m_chanOpen) return;
     channelPageCatchUp();
     m_chanOpen = false;
     if (!m_settings.motion) m_chanIn = 0.f;
-    m_audio.play("hide_modal");
+    if (!quiet) m_audio.play("hide_modal");
 }
 
-// L / R: the channel before or after, the grid's page following under it.
+// L / R: the channel before or after (HOME behind stays as it is until it closes).
 void CardsActivity::channelStep(int dir) {
     const int n = static_cast<int>(games().size());
     const int to = std::clamp(sel() + dir, 0, n - 1);
@@ -12173,21 +12179,19 @@ void CardsActivity::channelStep(int dir) {
 }
 
 void CardsActivity::channelStart() {
-    channelPageCatchUp();
-    m_chanOpen = false; // (it zooms away as the game starts from its tile)
+    closeChannel(true); // (it zooms away as the game starts from its tile)
     m_audio.play("activation");
     press(1, sel());
     play();
 }
 
-// Left / right choose Back or Start, A presses it; B goes back; L / R (ZL / ZR)
+// Left / right choose Back or Play, A presses it; B goes back; L / R (ZL / ZR)
 // the channel before or after; + the game's options over it; X closes the open game.
 void CardsActivity::updateChannel() {
     auto& in = app().input();
     using B = nxui::Button;
     if (!channelsOn() || !current() || m_moving || m_leaving) { // (+ > Move, Play...: it gives way)
-        channelPageCatchUp();
-        m_chanOpen = false;
+        closeChannel(true);
         return;
     }
     if (in.isDown(B::B)) {
@@ -12239,10 +12243,7 @@ bool CardsActivity::channelTouch(float x, float y) {
 void CardsActivity::drawChannel(nxui::Renderer& r) {
     const float dt = std::clamp(m_time - m_chanAt, 0.f, 0.1f);
     m_chanAt = m_time;
-    if (m_chanOpen && (!channelsOn() || m_moving || m_leaving)) {
-        channelPageCatchUp();
-        m_chanOpen = false;
-    }
+    if (!channelsOn() || m_moving || m_leaving) closeChannel(true);
     m_chanIn += ((m_chanOpen ? 1.f : 0.f) - m_chanIn) * (m_settings.motion ? std::min(1.f, dt * 11.f) : 1.f);
     if (!m_chanOpen && m_chanIn < 0.01f) m_chanIn = 0.f;
     m_chanSwap = std::min(1.f, m_chanSwap + dt / layout::channel::kSwapSec);
@@ -12273,9 +12274,10 @@ void CardsActivity::drawChannel(nxui::Renderer& r) {
     const auto th = m_thumbs.find(g.id);
     const nxui::Texture* pic = art && art->bg && art->bg->valid() && art->bgKind != ArtKind::Icon ? art->bg.get()
                              : art && art->card && art->card->valid() && art->kind != ArtKind::Icon ? art->card.get()
-                             : th != m_thumbs.end() && th->second.tex && th->second.tex->valid() ? th->second.tex.get()
                              : art && art->stock && art->stock->valid() ? art->stock.get()
-                             : art && art->icon && art->icon->valid() ? art->icon.get() : nullptr;
+                             : art && art->icon && art->icon->valid() ? art->icon.get()
+                             : th != m_thumbs.end() && th->second.tex && th->second.tex->valid() ? th->second.tex.get() // (96 px: last)
+                                                                                                  : nullptr;
     const float swap = easeOut(m_chanSwap);
     r.drawRoundedRect(frame, nxui::Color(0.02f, 0.03f, 0.05f, 0.9f * a), fr);
     r.pushClipRect(frame);
@@ -12299,37 +12301,32 @@ void CardsActivity::drawChannel(nxui::Renderer& r) {
         textMid(r, m_fLabel, name, frame.x + 32.f * k, strip.y + sh * 0.58f, kWhite.withAlpha(a * swap));
     }
 
-    // A game's disc, turning: silver, its label the game's icon, the light
-    // going round on it (and a mark at the rim, so the turn shows).
+    // A game's disc, turning: the game's icon over all of it, the light on
+    // it staying put (as a real disc's does), the hub and hole in the middle.
     if (m_settings.channelDisc && g.action.empty()) {
         const nxui::Vec2 c{640.f + (kDiscX - 640.f) * k, 360.f + (kDiscY - 360.f) * k};
         const float R = kDiscR * k * (0.7f + 0.3f * e);
         r.drawCircle({c.x + 3.f, c.y + 7.f}, R + 2.f, nxui::Color(0.f, 0.f, 0.f, 0.35f * a), 64);
-        r.drawCircle(c, R, nxui::Color(0.80f, 0.83f, 0.88f, a), 64);
-        r.drawCircle(c, R * 0.96f, nxui::Color(0.90f, 0.92f, 0.95f, a), 64);
-        const float turn = m_chanSpin * 6.2831853f;
-        // The light on it stays put (as a real disc's does); the label turns under it.
+        const nxui::Texture* label = art && art->stock && art->stock->valid() ? art->stock.get()
+                                   : art && art->icon && art->icon->valid() ? art->icon.get() : nullptr;
+        if (label) r.drawTextureDisc(label, c, R, m_chanSpin * 6.2831853f, kWhite.withAlpha(a));
+        else r.drawCircle(c, R, nxui::Color(0.86f, 0.88f, 0.92f, a), 64);
         for (int w = 0; w < 2; ++w) { // two soft wedges of light, opposite each other
             const float a0 = -2.2f + 3.14159265f * static_cast<float>(w);
             constexpr int kSteps = 6;
-            for (int s = 0; s < kSteps; ++s) {
-                const float t0 = a0 + 0.12f * static_cast<float>(s), t1 = t0 + 0.12f;
-                const float fade = 1.f - static_cast<float>(s) / kSteps;
-                r.drawTriangle(c, {c.x + std::cos(t0) * R * 0.95f, c.y + std::sin(t0) * R * 0.95f},
-                               {c.x + std::cos(t1) * R * 0.95f, c.y + std::sin(t1) * R * 0.95f},
-                               nxui::Color(1.f, 1.f, 1.f, 0.42f * fade * a));
+            for (int st = 0; st < kSteps; ++st) {
+                const float t0 = a0 + 0.12f * static_cast<float>(st), t1 = t0 + 0.12f;
+                const float fade = 1.f - static_cast<float>(st) / kSteps;
+                r.drawTriangle(c, {c.x + std::cos(t0) * R * 0.98f, c.y + std::sin(t0) * R * 0.98f},
+                               {c.x + std::cos(t1) * R * 0.98f, c.y + std::sin(t1) * R * 0.98f},
+                               nxui::Color(1.f, 1.f, 1.f, 0.16f * fade * a));
             }
         }
-        const float lr = R * 0.62f; // the label: the game's icon, turning
-        const nxui::Texture* label = art && art->stock && art->stock->valid() ? art->stock.get()
-                                   : art && art->icon && art->icon->valid() ? art->icon.get() : nullptr;
-        if (label) r.drawTextureDisc(label, c, lr, turn, kWhite.withAlpha(a));
-        else r.drawCircle(c, lr, accent(0.85f * a), 48);
-        r.drawCircle(c, R * 0.17f, nxui::Color(0.72f, 0.75f, 0.80f, a), 32); // the hub
-        r.drawCircle(c, R * 0.09f, nxui::Color(0.05f, 0.06f, 0.09f, a), 24); // the hole
+        r.drawCircle(c, R * 0.2f, nxui::Color(0.82f, 0.85f, 0.90f, 0.92f * a), 40); // the hub
+        r.drawCircle(c, R * 0.09f, nxui::Color(0.05f, 0.06f, 0.09f, a), 24);         // the hole
     }
 
-    // Back and Start, big, the chosen one lit.
+    // Back and Play, big, the chosen one lit.
     const std::string startWord = isRunning(g.id) ? "Resume" : g.action == "get" ? "Get" : "Play";
     const struct { layout::Box box; const char* word; int index; } buttons[] = {{kBack, "Back", 0}, {kStart, startWord.c_str(), 1}};
     for (const auto& b : buttons) {
@@ -14229,28 +14226,22 @@ void CardsActivity::drawGrid(nxui::Renderer& r) {
             const nxui::Rect face{tile.x + 5.f * sc, tile.y + 5.f * sc, tile.width - 10.f * sc, tile.height - 10.f * sc};
             auto it = m_art.find(g.id);
             const Art* art = it != m_art.end() ? &it->second : nullptr;
-            // Settings > Channels > Tile picture. Background: the game's own wide picture, the
-            // same whichever tile is chosen: its card art when that's wide (asked for the whole
-            // page, small), else its background once it's here; the console's icon until then.
-            // Icon: always the icon. A picture that just came fades in over what was there.
+            // Settings > Channels > Tile picture. Background: the game's background picture at
+            // a tile's size, asked for the whole page and kept (never swapped for another
+            // picture as the cursor moves); the console's icon until it comes, or when the game
+            // has no wide one. Icon: always the icon.
             const nxui::Texture* icon = art && art->stock && art->stock->valid() ? art->stock.get()
                                       : art && art->icon && art->icon->valid() ? art->icon.get() : nullptr;
             const nxui::Texture* pic = icon;
             const nxui::Texture* over = nullptr;
             float overIn = 1.f;
-            if (m_settings.channelArt == 0 && art) {
-                auto isWide = [](const nxui::Texture* t) { return t->width() * 5 >= t->height() * 6; }; // (1.2:1 or wider)
-                const bool cardWide = art->card && art->card->valid() && art->kind != ArtKind::Icon
-                                   && art->kind != ArtKind::Box && isWide(art->card.get());
-                const bool bgWide = art->bg && art->bg->valid() && art->bgKind != ArtKind::Icon && isWide(art->bg.get());
-                const nxui::Texture* wide = cardWide ? art->card.get() : bgWide ? art->bg.get() : nullptr;
-                if (wide) {
-                    const float in = easeOut((m_time - (cardWide ? art->cardIn : art->bgIn)) / 0.35f);
-                    if (in >= 1.f || !pic) pic = wide;
-                    else {
-                        over = wide;
-                        overIn = in;
-                    }
+            if (m_settings.channelArt == 0 && art && art->tile && art->tile->valid()
+                && (art->tileKind == ArtKind::Banner || art->tileKind == ArtKind::Grid)) {
+                const float in = easeOut((m_time - art->tileIn) / 0.35f);
+                if (in >= 1.f || !pic) pic = art->tile.get();
+                else {
+                    over = art->tile.get(); // (fading in over the icon)
+                    overIn = in;
                 }
             }
             if (pic) {

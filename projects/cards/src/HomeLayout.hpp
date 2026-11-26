@@ -1,7 +1,8 @@
 #pragma once
 // The home screen's layouts (Y cycles them; Settings > Look > Home layout) and
 // the geometry of the two new ones: Wheel (the row's selection and scroll,
-// laid out differently) and Channels (a grid style). Pure (no UI): CardsActivity draws what these place.
+// laid out differently) and Channels (a grid style), with Channels' screen
+// (A on a channel). Pure (no UI): CardsActivity draws what these place.
 
 #include "Settings.hpp"
 
@@ -13,7 +14,7 @@ namespace cards::layout {
 enum class Layout : int { Cards, Wheel, Grid, Channels, Cross, Count };
 
 constexpr int kRowCards = 0, kRowWheel = 2; // (1 was Flow, then another look: both gone, read as Cards)
-constexpr int kGridIcons = 0, kGridChannels = 1, kGridStyles = 2;
+constexpr int kGridIcons = 0, kGridChannels = 1;
 
 inline Layout current(const Settings& s) {
     if (s.xmbView) return Layout::Cross;
@@ -58,9 +59,6 @@ inline const char* name(Layout l) {
     default: return "Cards";
     }
 }
-
-inline bool rowModel(Layout l) { return l == Layout::Cards || l == Layout::Wheel; }
-inline bool gridModel(Layout l) { return l == Layout::Grid || l == Layout::Channels; }
 
 // ---------------------------------------------------------------- Wheel
 // The page's games on a gentle arc down the right side, the chosen one in the
@@ -128,7 +126,6 @@ constexpr float kSwapSec = 0.22f;                     // L / R: the picture slid
 }
 inline bool inBox(const Box& b, float x, float y) { return x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h; }
 constexpr float kChannelRadius = 22.f;
-constexpr float kChannelFocusScale = 1.06f;
 
 // The middle 16:9 of a w x h picture, as a source rect {x, y, width, height}.
 struct Crop { float x, y, w, h; };

@@ -10,7 +10,7 @@ static bool near(float a, float b, float eps = 0.01f) { return std::abs(a - b) <
 
 int main()
 {
-    // The model: every layout applies and reads back; the cycle visits all six.
+    // The model: every layout applies and reads back; the cycle visits all five.
     for (int i = 0; i < static_cast<int>(Layout::Count); ++i) {
         const Layout l = static_cast<Layout>(i);
         for (int from = 0; from < static_cast<int>(Layout::Count); ++from) {
@@ -45,8 +45,6 @@ int main()
         apply(t, Layout::Wheel);
         assert(t.gridLayout == 2 && t.crossStyle == 1 && t.gridStyle == kGridChannels);
     }
-    assert(rowModel(Layout::Cards) && rowModel(Layout::Wheel) && !rowModel(Layout::Grid));
-    assert(gridModel(Layout::Channels) && !gridModel(Layout::Cross));
 
     // Wheel: the middle row is full size and opaque; rows get smaller and
     // fainter both ways, bend right, and step down by the pitch.
