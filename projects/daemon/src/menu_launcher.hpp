@@ -193,8 +193,14 @@ inline Result terminateWithin(uint64_t timeoutNs) {
     if (g_active) {
         Result rc = appletHolderRequestExitOrTerminate(&g_holder, timeoutNs);
         switchu::FileLog::log("[menu_la] terminate request rc=0x%X", rc);
-        g_lastExitReason = R_SUCCEEDED(rc) ? appletHolderGetExitReason(&g_holder)
-                                           : LibAppletExitReason_Unexpected;
+        // The exit reason is only known once the holder is joined (appletHolderJoin
+        // reads it; GetExitReason just returns it). Join only when the applet has
+        // ended -- Join itself waits forever -- and give a terminated one 0.5 s.
+        g_lastExitReason = LibAppletExitReason_Unexpected;
+        if (R_SUCCEEDED(rc) && R_SUCCEEDED(eventWait(&g_holder.StateChangedEvent, 500'000'000ULL))) {
+            appletHolderJoin(&g_holder);
+            g_lastExitReason = appletHolderGetExitReason(&g_holder);
+        }
         if (g_startedAtTick != 0)
             g_lastRuntimeNs = armTicksToNs(armGetSystemTick() - g_startedAtTick);
     }
@@ -210,10 +216,10 @@ inline bool checkFinished() {
     if (appletHolderCheckFinished(&g_holder)) {
         if (g_startedAtTick != 0)
             g_lastRuntimeNs = armTicksToNs(armGetSystemTick() - g_startedAtTick);
+        appletHolderJoin(&g_holder); // sets the exit reason read below
         g_lastExitReason = appletHolderGetExitReason(&g_holder);
         switchu::FileLog::log("[menu_la] holder finished reason=%d",
                               (int)g_lastExitReason);
-        appletHolderJoin(&g_holder);
         const Result cleanupRc = cleanupHolder();
         if (R_FAILED(cleanupRc))
             switchu::FileLog::log("[menu_la] finished cleanup FAIL: 0x%X", cleanupRc);
