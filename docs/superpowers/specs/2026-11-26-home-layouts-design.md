@@ -52,9 +52,13 @@ cycling. The existing Grid view / Cross view toggles stay and agree with it.
   after with a slide. HOME behind stays still (no page slide or sheen; nearly hidden) and
   catches up to the chosen tile's page when the screen closes.
   + the options over it; it closes for Move, a launch, or a layout change.
+  While it's open (and the disc on) it asks for full frame rate (`wantsFullRate`): the idle
+  tiers had thinned the frames a few seconds after the last press and the disc stuttered.
 - Settings > Wheel: on / off, Side (rows right or left, mirrored), Row size (0.85 / 1 / 1.15:
   scale and pitch; the fall-off goes by on-screen distance so all rows stay on screen).
-- Settings > Channels: on / off, Tiles (4 x 3 or 3 x 2), Channel screen, Spinning disc,
+- Settings > Channels: on / off, Tiles (4 x 3 or 3 x 2), Tile picture (Background, the default:
+  the wide card art, asked for the whole page at card size, else the background, else the icon;
+  the same chosen or not, so nothing swaps on selection. Icon: the console's icon), Channel screen, Spinning disc,
   Every channel's name.
 - The scrolling light on the chosen card is masked to its rounded corners
   (nxui `beginRoundedMask` / `endRoundedMask`, the existing SDF shape mask).

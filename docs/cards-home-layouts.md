@@ -9,7 +9,7 @@ Y on HOME goes to the next layout, round in this order. Settings > Look > Home l
 | Cards | The card row (as before) | Left / Right |
 | **Wheel** (new) | The chosen game's cover large on one side; the page's games as glass rows on an arc on the other | Up / Down (Left / Right too), up on the first game reaches the top bar, swipe up / down |
 | Grid | Wii U style icons (as before) | D-pad over the tiles |
-| **Channels** (new) | A grid of wide tiles (12 or 6 a page); the chosen one shows the game's background picture and its name. A opens the channel screen | As the Grid |
+| **Channels** (new) | A grid of wide tiles (12 or 6 a page) with each game's wide picture (or its icon: Settings > Channels > Tile picture); the chosen one shows its name. A opens the channel screen | As the Grid |
 | Cross view | PSP / PS3 style (as before) | As before |
 
 Everything else is the same in every layout: A plays (Channels: opens the channel), + opens the
@@ -35,12 +35,13 @@ a disc turning for a game, and big **Back** and **Play** buttons (Play chosen fi
 
 - **Wheel** tab: Wheel on / off, Side (rows on the right or the left; the cover takes the
   other), Row size (Small, Medium, Large; smaller shows more games).
-- **Channels** tab: Channels on / off, Tiles (4 x 3, or 3 x 2 bigger), Channel screen (off:
+- **Channels** tab: Channels on / off, Tiles (4 x 3, or 3 x 2 bigger), Tile picture (Background: each game's wide picture,
+  the same whether chosen or not, its icon until one is found; Icon: the console's icon), Channel screen (off:
   A starts the game at once), Spinning disc, Every channel's name (off: only the chosen one's).
 - The Grid view tab's toggle is on only for the Grid itself (not Channels).
 - In the settings file: `rowStyle` (0 cards, 2 wheel; 1 is an old look, read as cards),
   `gridStyle` (0 icons, 1 channels), `wheelLeft`, `wheelSize`, `channelScreen`, `channelDisc`,
-  `channelNames`, `channelTiles`. Older settings files open as before.
+  `channelNames`, `channelTiles`, `channelArt`. Older settings files open as before.
 
 ## Check on the console
 

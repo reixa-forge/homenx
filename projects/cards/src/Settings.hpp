@@ -61,6 +61,7 @@ struct Settings {
     bool channelDisc = true;  // the channel's turning disc
     bool channelNames = false; // every tile's name (else the chosen one's)
     int channelTiles = 0;     // 0 4 x 3, 1 3 x 2 bigger
+    int channelArt = 0;       // the tiles' picture: 0 each game's wide picture (else its icon), 1 the console's icon
     int startPage = 0;        // (old: the page order's first is where it opens now)
     std::vector<int> pageOrder = {0, 1, 2, 3}; // the pages in order: 0 games, 1 homebrew, 2 Nintendo, 3 media, then custom pages
     int lastPage = -1; // the custom page something was started from: back there afterwards
@@ -233,6 +234,7 @@ struct Settings {
             channelDisc = j.value("channelDisc", channelDisc);
             channelNames = j.value("channelNames", channelNames);
             channelTiles = std::clamp(j.value("channelTiles", channelTiles), 0, 1);
+            channelArt = std::clamp(j.value("channelArt", channelArt), 0, 1);
             startPage = j.value("startPage", startPage);
             pageOrder = j.value("pageOrder", pageOrder);
             customPages.clear();
@@ -395,6 +397,7 @@ struct Settings {
         j["channelDisc"] = channelDisc;
         j["channelNames"] = channelNames;
         j["channelTiles"] = channelTiles;
+        j["channelArt"] = channelArt;
         j["gridCursorColour"] = gridCursorColour;
         j["gridPill"] = gridPill;
         j["gridDots"] = gridDots;

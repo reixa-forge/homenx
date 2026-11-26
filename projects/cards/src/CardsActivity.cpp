@@ -1042,6 +1042,9 @@ void CardsActivity::pictureArrived() {
 // a game, a picture fading in, a notice, the lock screen coming or going...
 bool CardsActivity::wantsFullRate() const {
     if (m_leaving || m_returnTex || m_moving || m_dragging || m_musicVolDrag) return true;
+    // The channel screen: its zoom and slide, and the disc while it turns (else, a few
+    // seconds after the last press, the frames thin out and the disc stutters).
+    if (m_chanOpen ? m_chanIn < 1.f || m_chanSwap < 1.f || m_settings.channelDisc : m_chanIn > 0.f) return true;
     if (m_wakeStart && m_wakePresentedFrames < 3) return true; // (LockFramePresented counts real frames)
     for (float v : {m_intro, m_pageIn, m_detailIn, m_sheen, m_menuIn, m_taskIn, m_logIn, m_pressT, m_bgFade,
                     m_sheetIn, m_sheetRowsIn, m_quickIn, m_powerIn, m_dotsIn, m_optIn, m_optLevelIn, m_pickIn, m_musicIn,
@@ -1765,6 +1768,8 @@ void CardsActivity::wantArt() {
         // pages either side; and the backgrounds of the tiles around the cursor.
         const int pg = s / m_gridPer;
         for (int i = pg * m_gridPer; i < (pg + 1) * m_gridPer; ++i) add(i, kStock);
+        if (channelsOn() && m_settings.channelArt == 0) // Channels' wide pictures: each tile's card art (small)
+            for (int i = pg * m_gridPer; i < (pg + 1) * m_gridPer; ++i) add(i, kCard);
         for (int d : {1, -1, m_gridCols, -m_gridCols}) add(s + d, kBackground);
         // Then every other page's, nearest pages first, when nothing else is
         // wanted (they're kept: SwitchU's grid shows its icons at once). Up to
@@ -7573,6 +7578,13 @@ void CardsActivity::buildSettings() {
         wantArt();
         save();
     }, "How many channels on each page"));
+    channelTab.rows.push_back(choice("Tile picture", [this]() {
+        return std::string(m_settings.channelArt == 1 ? "Icon" : "Background");
+    }, [this, save](int) {
+        m_settings.channelArt = 1 - m_settings.channelArt;
+        wantArt();
+        save();
+    }, "Background: each game's own wide picture (its icon until it's found). Icon: the console's icon"));
     channelTab.rows.push_back(toggle("Channel screen", [this]() { return m_settings.channelScreen; },
         [this, save]() { m_settings.channelScreen = !m_settings.channelScreen; save(); },
         "On: A opens the channel (its picture large, Play and Back; L / R the next one). Off: A starts it"));
@@ -14208,9 +14220,8 @@ void CardsActivity::drawGrid(nxui::Renderer& r) {
         const float sc = tile.height / m_gridCellH; // (Channels' tiles are wide: their height)
 
         if (channelsOn()) {
-            // A channel: the console's icon filling a wide glass tile (its middle,
-            // 16:9); the chosen one shows the game's background picture once it's
-            // here (loaded anyway, for the screen behind) and its name along the bottom.
+            // A channel: a wide glass tile filled with the game's picture (cropped to
+            // its shape); the chosen one has its name along the bottom.
             const float rad = layout::kChannelRadius * sc;
             r.drawRoundedRect({tile.x + 1.f, tile.y + 6.f, tile.width, tile.height},
                               nxui::Color(0.02f, 0.04f, 0.06f, 0.22f * a), rad + 1.f);
@@ -14218,8 +14229,30 @@ void CardsActivity::drawGrid(nxui::Renderer& r) {
             const nxui::Rect face{tile.x + 5.f * sc, tile.y + 5.f * sc, tile.width - 10.f * sc, tile.height - 10.f * sc};
             auto it = m_art.find(g.id);
             const Art* art = it != m_art.end() ? &it->second : nullptr;
-            const nxui::Texture* pic = art && art->stock && art->stock->valid() ? art->stock.get()
-                                     : art && art->icon && art->icon->valid() ? art->icon.get() : nullptr;
+            // Settings > Channels > Tile picture. Background: the game's own wide picture, the
+            // same whichever tile is chosen: its card art when that's wide (asked for the whole
+            // page, small), else its background once it's here; the console's icon until then.
+            // Icon: always the icon. A picture that just came fades in over what was there.
+            const nxui::Texture* icon = art && art->stock && art->stock->valid() ? art->stock.get()
+                                      : art && art->icon && art->icon->valid() ? art->icon.get() : nullptr;
+            const nxui::Texture* pic = icon;
+            const nxui::Texture* over = nullptr;
+            float overIn = 1.f;
+            if (m_settings.channelArt == 0 && art) {
+                auto isWide = [](const nxui::Texture* t) { return t->width() * 5 >= t->height() * 6; }; // (1.2:1 or wider)
+                const bool cardWide = art->card && art->card->valid() && art->kind != ArtKind::Icon
+                                   && art->kind != ArtKind::Box && isWide(art->card.get());
+                const bool bgWide = art->bg && art->bg->valid() && art->bgKind != ArtKind::Icon && isWide(art->bg.get());
+                const nxui::Texture* wide = cardWide ? art->card.get() : bgWide ? art->bg.get() : nullptr;
+                if (wide) {
+                    const float in = easeOut((m_time - (cardWide ? art->cardIn : art->bgIn)) / 0.35f);
+                    if (in >= 1.f || !pic) pic = wide;
+                    else {
+                        over = wide;
+                        overIn = in;
+                    }
+                }
+            }
             if (pic) {
                 const layout::Crop c = layout::wideCrop(static_cast<float>(pic->width()), static_cast<float>(pic->height()),
                                                         face.width / face.height);
@@ -14230,10 +14263,7 @@ void CardsActivity::drawGrid(nxui::Renderer& r) {
                         kMuted.withAlpha(a));
             }
             const float focus = gridFocusGlow(i);
-            if (i == s && art && art->bg && art->bg->valid() && art->bgKind != ArtKind::Icon) {
-                const float in = easeOut((m_time - art->bgIn) / 0.35f) * focus;
-                if (in > 0.01f) drawCover(r, art->bg.get(), face, rad - 3.f, kWhite.withAlpha(a * in));
-            }
+            if (over && overIn > 0.01f) drawCover(r, over, face, rad - 3.f, kWhite.withAlpha(a * overIn));
             // Its name, on a dark strip along the bottom: the chosen one's (Settings > Channels: every one's).
             const float named = std::max(focus, m_settings.channelNames ? 1.f : 0.f);
             if (named > 0.01f) {
