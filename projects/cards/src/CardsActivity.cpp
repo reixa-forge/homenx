@@ -1120,7 +1120,7 @@ void CardsActivity::applyGridLayout() {
     struct L { int cols, rows; float cell, padX, padY; };
     static const L kLayouts[] = {{5, 3, 150.f, 20.f, 16.f}, {4, 3, 150.f, 24.f, 16.f}, {4, 2, 190.f, 28.f, 24.f}, {6, 4, 112.f, 16.f, 10.f}};
     const L& l = kLayouts[std::clamp(m_settings.gridLayout, 0, 3)];
-    // Channels: its own wide tiles, whatever the grid's size says.
+    // Channels: its own square tiles, whatever the grid's size says.
     const layout::GridCell c = m_settings.gridStyle == layout::kGridChannels
                                    ? layout::channelCell(m_settings.channelTiles)
                                    : layout::GridCell{l.cols, l.rows, l.cell, l.cell, l.padX, l.padY};
@@ -7564,7 +7564,7 @@ void CardsActivity::buildSettings() {
         [this]() {
             const bool on = layout::current(m_settings) == layout::Layout::Channels;
             setLayout(on ? layout::Layout::Cards : layout::Layout::Channels);
-        }, "Wide rounded tiles, a page of them at a time"));
+        }, "Square rounded tiles, a page of them at a time"));
     channelTab.rows.push_back(choice("Tiles", [this]() {
         return std::string(m_settings.channelTiles == 1 ? "3 x 2, bigger" : "4 x 3");
     }, [this, save](int) {
@@ -14208,8 +14208,7 @@ void CardsActivity::drawGrid(nxui::Renderer& r) {
         const float sc = tile.height / m_gridCellH; // (Channels' tiles are wide: their height)
 
         if (channelsOn()) {
-            // A channel: the console's icon filling a wide glass tile (its middle,
-            // 16:9); the chosen one shows the game's background picture once it's
+            // A channel: the console's icon filling a square glass tile; the chosen one shows the game's background picture once it's
             // here (loaded anyway, for the screen behind) and its name along the bottom.
             const float rad = layout::kChannelRadius * sc;
             r.drawRoundedRect({tile.x + 1.f, tile.y + 6.f, tile.width, tile.height},

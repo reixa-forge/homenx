@@ -103,15 +103,17 @@ int main()
     {
         const GridCell c = channelCell(1);
         assert(c.cols * c.w + (c.cols - 1) * c.padX < 1200.f && c.rows * c.h + (c.rows - 1) * c.padY < 482.f);
-        assert(near(c.w / c.h, 16.f / 9.f, 0.02f));
+        assert(near(c.w, c.h));
         assert(channelCell(0).cols == 4 && channelCell(5).cols == 4);
     }
-    // Channels: four wide tiles fit across with their gaps; the crop is 16:9 and centred.
+    // Channels: four square tiles fit across with their gaps; the 16:9 crop is centred.
     {
         const GridCell c = kChannelCell;
         assert(c.cols * c.w + (c.cols - 1) * c.padX < 1280.f - 2.f * 40.f);
-        assert(c.rows * c.h + (c.rows - 1) * c.padY < 560.f);
-        assert(near(c.w / c.h, 16.f / 9.f, 0.02f));
+        assert(c.rows * c.h + (c.rows - 1) * c.padY <= 482.f); // (the grid's room)
+        assert(near(c.w, c.h));
+        const Crop sqIn = wideCrop(1280.f, 720.f, 1.f); // a wide picture in a square tile: its middle
+        assert(near(sqIn.w, 720.f) && near(sqIn.h, 720.f) && near(sqIn.x, 280.f));
         const Crop sq = wideCrop(256.f, 256.f);
         assert(near(sq.x, 0.f) && near(sq.w, 256.f) && near(sq.h, 144.f) && near(sq.y, 56.f));
         const Crop wide = wideCrop(1920.f, 600.f);

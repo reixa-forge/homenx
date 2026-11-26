@@ -9,7 +9,7 @@ Y on HOME goes to the next layout, round in this order. Settings > Look > Home l
 | Cards | The card row (as before) | Left / Right |
 | **Wheel** (new) | The chosen game's cover large on one side; the page's games as glass rows on an arc on the other | Up / Down (Left / Right too), up on the first game reaches the top bar, swipe up / down |
 | Grid | Wii U style icons (as before) | D-pad over the tiles |
-| **Channels** (new) | A grid of wide tiles (12 or 6 a page); the chosen one shows the game's background picture and its name. A opens the channel screen | As the Grid |
+| **Channels** (new) | A grid of square rounded tiles (12 or 6 a page); the chosen one shows the game's background picture and its name. A opens the channel screen | As the Grid |
 | Cross view | PSP / PS3 style (as before) | As before |
 
 Everything else is the same in every layout: A plays (Channels: opens the channel), + opens the

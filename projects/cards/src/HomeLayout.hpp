@@ -110,10 +110,10 @@ inline Box wheelCover(bool left = false) {
 }
 
 // ---------------------------------------------------------------- Channels
-// A grid style: wide tiles, 4 x 3 a page (Settings > Channels > Tiles: or 3 x 2, bigger).
+// A grid style: square rounded tiles, 4 x 3 a page (Settings > Channels > Tiles: or 3 x 2, bigger).
 struct GridCell { int cols, rows; float w, h, padX, padY; };
-constexpr GridCell kChannelCell{4, 3, 268.f, 151.f, 22.f, 20.f};
-constexpr GridCell kChannelCellBig{3, 2, 352.f, 198.f, 26.f, 28.f};
+constexpr GridCell kChannelCell{4, 3, 150.f, 150.f, 40.f, 16.f};
+constexpr GridCell kChannelCellBig{3, 2, 220.f, 220.f, 44.f, 24.f};
 inline GridCell channelCell(int tiles) { return tiles == 1 ? kChannelCellBig : kChannelCell; }
 
 // A channel opened (A on a tile): its picture large, a disc turning in the
@@ -130,7 +130,7 @@ inline bool inBox(const Box& b, float x, float y) { return x >= b.x && x < b.x +
 constexpr float kChannelRadius = 22.f;
 constexpr float kChannelFocusScale = 1.06f;
 
-// The middle 16:9 of a w x h picture, as a source rect {x, y, width, height}.
+// The middle of a w x h picture in a shape (aspect: width / height), as a source rect {x, y, width, height}.
 struct Crop { float x, y, w, h; };
 inline Crop wideCrop(float w, float h, float aspect = 16.f / 9.f) {
     if (w <= 0.f || h <= 0.f) return {0.f, 0.f, 0.f, 0.f};
