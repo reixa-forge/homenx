@@ -281,6 +281,7 @@
       "tv_resolution": "TV Çözünürlüğü",
       "tv_resolution_desc": "HDMI çözünürlüğünü ayarla. Otomatik önerilen değeri kullanır.",
       "res_720p": "720p",
+      "res_480p": "480p",
       "res_1080p": "1080p",
       "hdmi_rgb_range": "HDMI RGB Aralığı",
       "hdmi_rgb_range_desc": "PC monitörleri için Tam, çoğu TV için Sınırlı.",

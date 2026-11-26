@@ -253,6 +253,7 @@
       "tv_resolution": "Résolution TV",
       "tv_resolution_desc": "Ajuste la résolution HDMI. Auto utilise la valeur recommandée.",
       "res_720p": "720p",
+      "res_480p": "480p",
       "res_1080p": "1080p",
       "hdmi_rgb_range": "Plage RGB HDMI",
       "hdmi_rgb_range_desc": "Full pour moniteur PC, Limited pour la plupart des TV.",

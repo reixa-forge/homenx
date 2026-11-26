@@ -69,6 +69,7 @@
       "tv_resolution": "Разрешение TV",
       "tv_resolution_desc": "Настройте разрешение HDMI. Auto использует рекомендуемое значение.",
       "res_720p": "720p",
+      "res_480p": "480p",
       "res_1080p": "1080p",
       "hdmi_rgb_range": "Диапазон RGB HDMI",
       "hdmi_rgb_range_desc": "Полный для мониторов ПК, Ограниченный для большинства TV.",

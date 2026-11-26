@@ -69,6 +69,7 @@
       "tv_resolution": "TV-Auflösung",
       "tv_resolution_desc": "HDMI-Auflösung anpassen. 'Auto' verwendet den empfohlenen Wert.",
       "res_720p": "720p",
+      "res_480p": "480p",
       "res_1080p": "1080p",
       "hdmi_rgb_range": "RGB-Spektrum (TV)",
       "hdmi_rgb_range_desc": "Volles Spektrum für PC-Monitore, Begrenztes Spektrum für die meisten Fernseher.",
