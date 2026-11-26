@@ -86,7 +86,7 @@ private:
     void openCustomPages();
     void openPagePicker();
     void editCustomPage(int page);
-    void addToCustomPage(const Game& game, bool move);
+    void addToCustomPage(const Game& game); // + > Move to… > Add a copy to a page…
     void openStorage();
     void readStorage(bool withTitles = false);
     bool m_storageWantTitles = false;
@@ -674,6 +674,8 @@ private:
     MenuItem plusItem(plus::Entry e, const Game& g); // one entry: its label, glyph and action
     void showOptionLevel(plus::Level level);     // fills the sheet with that level's entries
     std::vector<MenuItem> moveLevelItems(const Game& g); // Move to…'s entries
+    bool libraryMovable(const Game& g) const;           // on Games / Homebrew / Media (not the Nintendo page)
+    void moveCardTo(const Game& g, int from, int to);   // Move to… > a page (`from`: the page the sheet was opened on)
     void updateOptions();
     bool optionsTouch();
     void drawOptions(nxui::Renderer& r);
