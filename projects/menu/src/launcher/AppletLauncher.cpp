@@ -237,9 +237,23 @@ std::vector<std::uint8_t> loaderBytes() {
 #endif
 }
 
-std::vector<std::uint8_t> fileBytes(const char* path) {
+// Whether the file at path holds exactly these bytes. Compares in 4 KB pieces after the
+// size: reading the whole file held a user's own hbmenu.nro (MBs) in HOME's memory
+// just to find it differs.
+bool sameBytes(const char* path, const std::vector<std::uint8_t>& want) {
+    std::error_code ec;
+    const auto size = std::filesystem::file_size(path, ec);
+    if (ec || size != want.size()) return false;
     std::ifstream in(path, std::ios::binary);
-    return std::vector<std::uint8_t>{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    char chunk[4096];
+    for (std::size_t offset = 0; offset < want.size();) {
+        const std::size_t length = std::min(sizeof(chunk), want.size() - offset);
+        if (!in.read(chunk, static_cast<std::streamsize>(length))
+            || std::memcmp(chunk, want.data() + offset, length) != 0)
+            return false;
+        offset += length;
+    }
+    return true;
 }
 } // namespace
 
@@ -254,7 +268,7 @@ bool AppletLauncher::installLoader() {
     }
     std::error_code ec;
     if (std::filesystem::exists(kHbmenu, ec)) {
-        if (fileBytes(kHbmenu) == loader) return true; // already installed
+        if (sameBytes(kHbmenu, loader)) return true; // already installed
         if (!nroNamed(kHbmenu, "HomeNX-Loader")) {
             // Keep the user's own hbmenu (newest one wins) for the Loader's fallback.
             std::filesystem::remove(kHbmenuOriginal, ec);
@@ -278,7 +292,7 @@ bool AppletLauncher::installLoader() {
         ec.clear();
         std::filesystem::rename(tmp, kHbmenu, ec);
     }
-    if (!written || ec || fileBytes(kHbmenu) != loader) {
+    if (!written || ec || !sameBytes(kHbmenu, loader)) {
         g_loaderError = "Couldn't write sdmc:/hbmenu.nro (" +
             (ec ? ec.message() : std::string(written ? "verify failed" : std::strerror(errno))) + ").";
         std::filesystem::remove(tmp, ec);
