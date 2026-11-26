@@ -4503,51 +4503,57 @@ void CardsActivity::openOptions() {
     if (m_storageJob.valid()) { say("Wait for the software transfer to finish."); return; }
     const Game* gp = current();
     if (!gp) return;
-    const Game g = *gp;
+    m_optGame = *gp;
+    m_optLevel = plus::Level::Top; // (a new sheet starts at the top, on its first entry)
+    showOptionLevel(plus::Level::Top);
+    m_optOpen = true;
+    m_optIn = m_settings.motion ? 0.f : 1.f;
+    m_audio.play("show_modal");
+}
+
+plus::Card CardsActivity::plusCard(const Game& g) const {
+    plus::Card c;
+    c.get = g.action == "get";
+    c.installed = g.action.empty();
+    c.game = g.action.empty() && g.path.empty() && !g.homebrew;
+    c.homebrew = g.homebrew;
+    c.hasId = g.id != 0;
+    c.hasUpdate = nroUpdate(g) != nullptr;
+#ifdef SWITCHU_MENU
+    c.canClose = isRunning(g.id);
+    c.canPanel = g.action != "get" && m_settings.panelApp != idText(g.id);
+#else
+    c.canClose = c.canPanel = false;
+#endif
+    c.showDetails = !m_settings.xmbView || !m_settings.crossPlusDetails;
+    c.deletable = (!g.path.empty() && g.action.empty() && g.path != "sdmc:/hbmenu.nro") // a .nro
+               || (g.path.empty() && g.action.empty());                                 // on the console
+    return c;
+}
+
+void CardsActivity::showOptionLevel(plus::Level level) {
+    const Game g = m_optGame;
     std::vector<MenuItem> items;
-    const bool game = g.action.empty() && g.path.empty() && !g.homebrew;
-    const bool running = isRunning(g.id);
-    items.push_back(action(running ? "Resume" : g.action == "get" ? "Get" : game ? "Play" : "Open", [this]() { play(); }));
-    items.back().glyph = g.action == "get" ? "download" : "play";
-#ifdef SWITCHU_MENU
-    if (running) {
-        items.push_back(action("Close software", [this]() {
-            m_launcher.terminateApplication();
-            say("Closing it...");
-        }, true));
-        items.back().glyph = "power";
+    int chosen = 0;
+    if (level == plus::Level::MoveTo) {
+        items = moveLevelItems(g);
+    } else {
+        const std::vector<plus::Entry> list = plus::entries(level, plusCard(g));
+        for (size_t i = 0; i < list.size(); ++i) {
+            items.push_back(plusItem(list[i], g));
+            // Back at the top: on the group that was open.
+            if (level == plus::Level::Top && m_optLevel != plus::Level::Top && plus::opens(list[i]) == m_optLevel)
+                chosen = static_cast<int>(i);
+        }
     }
-#endif
-    items.push_back(action("Move", [this]() { startMove(); }));
-    items.back().glyph = "arrows";
-    if (!m_settings.xmbView || !m_settings.crossPlusDetails) {
-        items.push_back(action("Details", [this]() { openCrossInfo(); }));
-        items.back().glyph = "dots";
-    }
-    if (g.id && g.action != "get") {
-        items.push_back(action(isFavourite(g.id) ? "Unfavourite" : "Favourite",
-                               [this, g]() { toggleFavourite(g); }));
-        items.back().glyph = "star";
-        items.push_back(action("Note", [this, g]() { editNote(g); }));
-        items.back().glyph = "tag";
-    }
-    items.push_back(action("Search games", [this]() { searchGames(); }));
-    items.back().glyph = "search";
-    if (g.action != "get") {
-        items.push_back(action("Rename", [this, g]() { renameCard(g); }));
-        items.back().glyph = "tag";
-    }
-#ifdef SWITCHU_MENU
-    if (g.action != "get" && m_settings.panelApp != idText(g.id)) {
-        items.push_back(action("Put on the panel button", [this, g]() {
-            m_settings.panelApp = idText(g.id);
-            m_settings.save();
-            m_audio.play("toggle_on");
-            say(trf("{app} is on the panel's right button now (where News was).", {g.name}));
-        }));
-        items.back().glyph = "copy";
-    }
-#endif
+    m_optItems = std::move(items);
+    m_optLevel = level;
+    m_optSel = chosen;
+}
+
+// Move to…: the card onto another page or a custom one.
+std::vector<CardsActivity::MenuItem> CardsActivity::moveLevelItems(const Game& g) {
+    std::vector<MenuItem> items;
     if (g.action.empty()) {
         items.push_back(action("Move to custom page", [this, g]() { addToCustomPage(g, true); }));
         items.back().glyph = "copy";
@@ -4571,8 +4577,6 @@ void CardsActivity::openOptions() {
             }));
             items.back().glyph = "trash";
         }
-        items.push_back(action("Hide this card", [this, g]() { hideCard(g); })); // (it stays installed)
-        items.back().glyph = "moon";
     }
     if (g.action.empty() && m_page != kNintendo && m_page < kPageCount) // onto another page: ports with the games, ...
         for (int to : {static_cast<int>(kGames), static_cast<int>(kHomebrew), static_cast<int>(kMedia)})
@@ -4580,9 +4584,165 @@ void CardsActivity::openOptions() {
                 items.push_back(action(trf("Move to {page}", {pageName(to)}), [this, g, to]() { moveToPage(g, to); }));
                 items.back().glyph = to == kMedia ? "music" : to == kGames ? "play" : "dots";
             }
-    if (g.action.empty()) {
+    return items;
+}
+
+// One entry of the + sheet (plus::entries says which, and when).
+CardsActivity::MenuItem CardsActivity::plusItem(plus::Entry e, const Game& g) {
+    using E = plus::Entry;
+    MenuItem item;
+    switch (e) {
+    case E::Play: {
+        const bool game = g.action.empty() && g.path.empty() && !g.homebrew;
+        const bool running = isRunning(g.id);
+        item = action(running ? "Resume" : g.action == "get" ? "Get" : game ? "Play" : "Open", [this]() { play(); });
+        item.glyph = g.action == "get" ? "download" : "play";
+        break;
+    }
+    case E::Update: { // a newer version
+        const NroUpdate* u = nroUpdate(g);
+        if (!u) break;
+        const std::string path = g.path;
+        const std::string to = versionName(u->latest);
+        item = action(to.empty() ? tr("Update to the latest version") : trf("Update to {version}", {to}), [this, path]() { updateNro(path); });
+        item.glyph = "download";
+        const std::string source = u->source;
+        item.value = [source]() { return source; };
+        break;
+    }
+    case E::CloseSoftware:
+#ifdef SWITCHU_MENU
+        item = action("Close software", [this]() {
+            m_launcher.terminateApplication();
+            say("Closing it...");
+        }, true);
+        item.glyph = "power";
+#endif
+        break;
+    case E::Favourite:
+        item = action(isFavourite(g.id) ? "Unfavourite" : "Favourite", [this, g]() { toggleFavourite(g); });
+        item.glyph = "star";
+        break;
+    case E::Rearrange:
+        item = action("Rearrange", [this]() { startMove(); });
+        item.glyph = "arrows";
+        break;
+    case E::MoveTo:
+    case E::Appearance:
+    case E::Info:
+    case E::More: { // a group: it opens in the same sheet
+        const plus::Level level = *plus::opens(e);
+        item = action(e == E::MoveTo ? "Move to…" : e == E::Appearance ? "Appearance…" : e == E::Info ? "Info…" : "More…",
+                      [this, level]() { showOptionLevel(level); });
+        item.glyph = e == E::MoveTo ? "arrows" : e == E::Appearance ? "sun" : "dots";
+        item.stay = true;
+        break;
+    }
+    case E::Delete:
+        if (!g.path.empty() && g.action.empty() && g.path != "sdmc:/hbmenu.nro") { // a .nro: off the SD card (not the homebrew menu: the Album needs it)
+            const std::string path = g.path, name = g.name;
+            const std::uint64_t id = g.id;
+            const int pg = m_page;
+            item = action("Delete", [this, path, name, id, pg]() {
+                openMenu(trf("Delete {game}?", {name}), {
+                    action("Delete it from the SD card", [this, path, name, id, pg]() {
+                        std::error_code ec;
+                        if (!std::filesystem::remove(path, ec) || ec) {
+                            say(trf("Couldn't delete {game}.", {name}));
+                            return;
+                        }
+                        LibraryEdit edit(*this);
+                        for (int p = 0; p < pageCount(); ++p) {
+                            auto& page = m_pages[p];
+                            page.erase(std::remove_if(page.begin(), page.end(), [id](const Game& x) { return x.id == id; }), page.end());
+                            m_sels[p] = std::clamp(m_sels[p], 0, std::max(0, static_cast<int>(page.size()) - 1));
+                        }
+                        if (m_page == pg) m_scroll = static_cast<float>(sel());
+                        saveOrder(pg);
+                        saveLists(m_pages[kGames], homebrewToSave());
+                        m_audio.play("toggle_off");
+                        say(trf("{game} was deleted.", {name}));
+                        wantArt();
+                    }, true),
+                    action("Cancel", [] {}),
+                });
+            }, true);
+            item.glyph = "trash";
+        } else if (g.path.empty() && g.action.empty()) { // a game or an NRO forwarder: uninstalled from the console
+            const std::uint64_t id = g.id;
+            const std::string name = g.name;
+            item = action("Delete", [this, id, name]() {
+                if (isRunning(id)) {
+                    say(trf("Close {game} first.", {name}));
+                    return;
+                }
+                openMenu(trf("Delete {game}?", {name}), {
+                    action("Delete it from the console", [this, id, name]() {
+                        if (m_deleteJob.valid()) {
+                            say(trf("Still deleting {game}...", {m_deleteName}));
+                            return;
+                        }
+                        m_deleteId = id;
+                        m_deleteName = name;
+                        say(trf("Deleting {game}...", {name}));
+                        m_deleteJob = std::async(std::launch::async, [id]() {
+                            offScreenCore();
+                            return static_cast<std::uint32_t>(nsDeleteApplicationCompletely(id));
+                        });
+                    }, true),
+                    action("Cancel", [] {}),
+                });
+            }, true);
+            item.glyph = "trash";
+        }
+        break;
+    case E::Rename:
+        item = action("Rename", [this, g]() { renameCard(g); });
+        item.glyph = "tag";
+        break;
+    case E::CardPicture:
+        item = action("Card picture", [this, g]() { openTitlePicker(g, true); });
+        item.glyph = "copy";
+        break;
+    case E::BackgroundPicture:
+        item = action("Background picture", [this, g]() { openTitlePicker(g, false, {}, true); });
+        item.glyph = "sun";
+        break;
+    case E::TitlePicture: // a game's, and homebrew's too (a port, an app, one moved to Games): chosen by hand for homebrew
+        item = action("Title picture", [this, g]() { openTitlePicker(g); });
+        item.glyph = "tag";
+        break;
+    case E::IconPicture:
+        item = action("Icon picture", [this, g]() { openIconPicker(g, customIconKey(g), false); });
+        item.glyph = "copy";
+        item.detail = "The square icon in the grid and the cross view";
+        break;
+    case E::FullCard: { // a port looks like a game: a cover, as a game's card
         const std::uint64_t id = g.id;
-        items.push_back(action("Download new pictures", [this, id]() {
+        const std::string key = g.path.empty() ? idText(g.id) : g.path;
+        item = action(g.fullCard ? "Show as an icon" : "Show as a full card", [this, key, id]() {
+            auto& list = m_settings.fullCards;
+            const auto at = std::find(list.begin(), list.end(), key);
+            if (at != list.end()) list.erase(at);
+            else list.push_back(key);
+            m_settings.save();
+            applyNames();
+            forgetShown(id);
+            auto it = m_art.find(id);
+            if (it != m_art.end()) { // its card again, the other way
+                it->second.cardAsked = false;
+                app().gpu().waitIdle(); // it may still be drawing
+                it->second.card.reset();
+            }
+            m_thumbs.erase(id);
+            wantArt();
+        });
+        item.glyph = "copy";
+        break;
+    }
+    case E::DownloadPictures: {
+        const std::uint64_t id = g.id;
+        item = action("Download new pictures", [this, id]() {
             forgetArt(id);
             auto it = m_art.find(id);
             if (it != m_art.end()) {
@@ -4593,137 +4753,69 @@ void CardsActivity::openOptions() {
             }
             m_thumbs.erase(id); // (the old one's small copy)
             wantArt();
-        }));
-        items.back().glyph = "restart";
-        items.push_back(action("Card picture", [this, g]() { openTitlePicker(g, true); }));
-        items.back().glyph = "copy";
-        items.push_back(action("Background picture", [this, g]() { openTitlePicker(g, false, {}, true); }));
-        items.back().glyph = "sun";
-        if (g.homebrew) { // a port looks like a game: a cover, as a game's card
-            const std::string key = g.path.empty() ? idText(g.id) : g.path;
-            items.push_back(action(g.fullCard ? "Show as an icon" : "Show as a full card", [this, key, id]() {
-                auto& list = m_settings.fullCards;
-                const auto at = std::find(list.begin(), list.end(), key);
-                if (at != list.end()) list.erase(at);
-                else list.push_back(key);
-                m_settings.save();
-                applyNames();
-                forgetShown(id);
-                auto it = m_art.find(id);
-                if (it != m_art.end()) { // its card again, the other way
-                    it->second.cardAsked = false;
-                    app().gpu().waitIdle(); // it may still be drawing
-                    it->second.card.reset();
-                }
-                m_thumbs.erase(id);
-                wantArt();
-            }));
-            items.back().glyph = "copy";
-        }
-        // A game's, and homebrew's too (a port, an app, one moved to Games): chosen by hand for homebrew.
-        items.push_back(action("Title picture", [this, g]() { openTitlePicker(g); }));
-        items.back().glyph = "tag";
-        items.push_back(action("Icon picture", [this, g]() { openIconPicker(g, customIconKey(g), false); }));
-        items.back().glyph = "copy";
-        items.back().detail = "The square icon in the grid and the cross view";
-        if (game) {
-            items.push_back(action("About this game", [this, g]() { openGameInfo(g); }));
-            items.back().glyph = "dots";
-            items.push_back(action("Copy its music", [this, g]() { copyGameMusic(g); }));
-            items.back().glyph = "music";
-            items.back().detail = "Choose its songs, hear them, rename them, then copy them to the SD card's music folder";
-            items.back().value = [this, g]() -> std::string {
-                if (!m_gm || m_gmGame != g.name) return {};
-                return std::to_string(m_gm->done.load()) + " / " + std::to_string(m_gm->found.load());
-            };
-        }
+        });
+        item.glyph = "restart";
+        break;
     }
-    if (const NroUpdate* u = nroUpdate(g)) { // a newer version
-        const std::string path = g.path;
-        const std::string to = versionName(u->latest);
-        MenuItem up = action(to.empty() ? tr("Update to the latest version") : trf("Update to {version}", {to}), [this, path]() { updateNro(path); });
-        up.glyph = "download";
-        const std::string source = u->source;
-        up.value = [source]() { return source; };
-        items.insert(items.begin() + 1, std::move(up));
+    case E::Details:
+        item = action("Details", [this]() { openCrossInfo(); });
+        item.glyph = "dots";
+        break;
+    case E::AboutGame:
+        item = action("About this game", [this, g]() { openGameInfo(g); });
+        item.glyph = "dots";
+        break;
+    case E::Note:
+        item = action("Note", [this, g]() { editNote(g); });
+        item.glyph = "tag";
+        break;
+    case E::CopyMusic:
+        item = action("Copy its music", [this, g]() { copyGameMusic(g); });
+        item.glyph = "music";
+        item.detail = "Choose its songs, hear them, rename them, then copy them to the SD card's music folder";
+        item.value = [this, g]() -> std::string {
+            if (!m_gm || m_gmGame != g.name) return {};
+            return std::to_string(m_gm->done.load()) + " / " + std::to_string(m_gm->found.load());
+        };
+        break;
+    case E::SearchGames:
+        item = action("Search games", [this]() { searchGames(); });
+        item.glyph = "search";
+        break;
+    case E::PanelButton:
+#ifdef SWITCHU_MENU
+        item = action("Put on the panel button", [this, g]() {
+            m_settings.panelApp = idText(g.id);
+            m_settings.save();
+            m_audio.play("toggle_on");
+            say(trf("{app} is on the panel's right button now (where News was).", {g.name}));
+        });
+        item.glyph = "copy";
+#endif
+        break;
+    case E::Hide:
+        item = action("Hide this card", [this, g]() { hideCard(g); }); // (it stays installed)
+        item.glyph = "moon";
+        break;
     }
-    if (!g.path.empty() && g.action.empty() && g.path != "sdmc:/hbmenu.nro") { // a .nro: off the SD card (not the homebrew menu: the Album needs it)
-        const std::string path = g.path, name = g.name;
-        const std::uint64_t id = g.id;
-        const int pg = m_page;
-        items.push_back(action("Delete", [this, path, name, id, pg]() {
-            openMenu(trf("Delete {game}?", {name}), {
-                action("Delete it from the SD card", [this, path, name, id, pg]() {
-                    std::error_code ec;
-                    if (!std::filesystem::remove(path, ec) || ec) {
-                        say(trf("Couldn't delete {game}.", {name}));
-                        return;
-                    }
-                    LibraryEdit edit(*this);
-                    for (int p = 0; p < pageCount(); ++p) {
-                        auto& page = m_pages[p];
-                        page.erase(std::remove_if(page.begin(), page.end(), [id](const Game& x) { return x.id == id; }), page.end());
-                        m_sels[p] = std::clamp(m_sels[p], 0, std::max(0, static_cast<int>(page.size()) - 1));
-                    }
-                    if (m_page == pg) m_scroll = static_cast<float>(sel());
-                    saveOrder(pg);
-                    saveLists(m_pages[kGames], homebrewToSave());
-                    m_audio.play("toggle_off");
-                    say(trf("{game} was deleted.", {name}));
-                    wantArt();
-                }, true),
-                action("Cancel", [] {}),
-            });
-        }, true));
-        items.back().glyph = "trash";
-    }
-    if (g.path.empty() && g.action.empty()) { // a game or an NRO forwarder: uninstalled from the console
-        const std::uint64_t id = g.id;
-        const std::string name = g.name;
-        items.push_back(action("Delete", [this, id, name]() {
-            if (isRunning(id)) {
-                say(trf("Close {game} first.", {name}));
-                return;
-            }
-            openMenu(trf("Delete {game}?", {name}), {
-                action("Delete it from the console", [this, id, name]() {
-                    if (m_deleteJob.valid()) {
-                        say(trf("Still deleting {game}...", {m_deleteName}));
-                        return;
-                    }
-                    m_deleteId = id;
-                    m_deleteName = name;
-                    say(trf("Deleting {game}...", {name}));
-                    m_deleteJob = std::async(std::launch::async, [id]() {
-                        offScreenCore();
-                        return static_cast<std::uint32_t>(nsDeleteApplicationCompletely(id));
-                    });
-                }, true),
-                action("Cancel", [] {}),
-            });
-        }, true));
-        items.back().glyph = "trash";
-    }
-    m_optItems = std::move(items);
-    m_optGame = g;
-    m_optSel = 0;
-    m_optOpen = true;
-    m_optIn = m_settings.motion ? 0.f : 1.f;
-    m_audio.play("show_modal");
+    return item;
 }
 
 namespace {
 const nxui::Rect kOptCard{176.f, 84.f, 928.f, 552.f};
 constexpr float kOptRowsY = 150.f; // below the title and its line, within the card
-// Plus's buttons: the first (Play) across the top, the rest two to a row.
-nxui::Rect optionRow(size_t n, size_t i, float dy) {
+// Plus's buttons: the first (Play) across the top, the rest two to a row;
+// in a group (wide false) all of them two to a row.
+nxui::Rect optionRow(size_t n, size_t i, float dy, bool wide = true) {
     const float x = kOptCard.x + 32.f + 260.f + 36.f - 10.f, w = kOptCard.x + kOptCard.width - 26.f - x;
     const float top = kOptCard.y + kOptRowsY + dy;
-    if (i == 0) return {x, top, w, 56.f};
-    const size_t k = i - 1, rows = std::max<size_t>(1, n / 2); // (n - 1 + 1) / 2 grid rows
-    const float pitch = std::min(60.f, (kOptCard.height - kOptRowsY - 40.f - 66.f) / static_cast<float>(rows));
+    if (wide && i == 0) return {x, top, w, 56.f};
+    const float head = wide ? 66.f : 0.f; // (below Play)
+    const size_t k = wide ? i - 1 : i, cells = wide ? n - 1 : n;
+    const size_t rows = std::max<size_t>(1, (cells + 1) / 2);
+    const float pitch = std::min(60.f, (kOptCard.height - kOptRowsY - 40.f - head) / static_cast<float>(rows));
     const float cw = (w - 10.f) * 0.5f;
-    return {x + (cw + 10.f) * static_cast<float>(k % 2), top + 66.f + pitch * static_cast<float>(k / 2), cw, pitch - 8.f};
+    return {x + (cw + 10.f) * static_cast<float>(k % 2), top + head + pitch * static_cast<float>(k / 2), cw, pitch - 8.f};
 }
 } // namespace
 
@@ -5351,14 +5443,16 @@ void CardsActivity::updateOptions() {
     const int n = static_cast<int>(m_optItems.size());
     const bool up = in.isDown(B::DUp) || in.isDown(B::LStickU), down = in.isDown(B::DDown) || in.isDown(B::LStickD);
     const bool left = in.isDown(B::DLeft) || in.isDown(B::LStickL), right = in.isDown(B::DRight) || in.isDown(B::LStickR);
+    const bool wide = m_optLevel == plus::Level::Top; // (a group has no Play row)
+    const int first = wide ? 1 : 0;
     int s = m_optSel; // Play on top, then the grid two to a row
-    if (s == 0) {
+    if (wide && s == 0) {
         if (down && n > 1) s = 1;
     } else {
-        const int k = s - 1;
+        const int k = s - first;
         if (left && k % 2 == 1) s -= 1;
         else if (right && k % 2 == 0 && s + 1 < n) s += 1;
-        else if (up) s = k < 2 ? 0 : s - 2;
+        else if (up) s = k >= 2 ? s - 2 : wide ? 0 : s;
         else if (down && s + 2 < n) s += 2;
         else if (down && k % 2 == 1 && s + 1 < n) s += 1; // the last row has one: down to it
     }
@@ -5366,14 +5460,20 @@ void CardsActivity::updateOptions() {
         m_optSel = s;
         m_audio.play("navigation");
     }
+    if (in.isDown(B::B) && !wide) { // back to the top, on the group that was open
+        showOptionLevel(plus::Level::Top);
+        m_audio.play("navigation");
+        return;
+    }
     if (in.isDown(B::B) || in.isDown(B::Plus) || in.isDown(B::X)) {
         m_optOpen = false;
         m_audio.play("hide_modal");
         return;
     }
     if (in.isDown(B::A) && m_optSel >= 0 && m_optSel < n) {
-        auto run = m_optItems[(size_t)m_optSel].run;
-        m_optOpen = false;
+        const MenuItem& item = m_optItems[(size_t)m_optSel];
+        auto run = item.run;
+        if (!item.stay) m_optOpen = false; // (a group opens in the sheet)
         m_audio.play("activation");
         if (run) run();
     }
@@ -5383,11 +5483,12 @@ bool CardsActivity::optionsTouch() {
     auto& in = app().input();
     if (!in.touchUp()) return in.isTouching();
     const float x = in.touchX(), y = in.touchY();
+    const bool wide = m_optLevel == plus::Level::Top;
     for (size_t i = 0; i < m_optItems.size(); ++i)
-        if (optionRow(m_optItems.size(), i, 0.f).contains(x, y)) {
+        if (optionRow(m_optItems.size(), i, 0.f, wide).contains(x, y)) {
             m_optSel = static_cast<int>(i);
             auto run = m_optItems[i].run;
-            m_optOpen = false;
+            if (!m_optItems[i].stay) m_optOpen = false; // (a group opens in the sheet)
             if (run) run();
             return true;
         }
@@ -5439,22 +5540,28 @@ void CardsActivity::drawOptions(nxui::Renderer& r) {
     const float ts = fitScale(m_fTitle, g.name, maxW, 0.75f);
     r.drawText(fit(m_fTitle, g.name, maxW, ts), {tx, kOptCard.y + 50.f + dy}, &m_fTitle, kWhite.withAlpha(a), ts);
     std::string about;
-    if (!g.action.empty()) about = g.author;
+    if (m_optLevel != plus::Level::Top) // in a group: its name
+        about = m_optLevel == plus::Level::MoveTo     ? tr("Move to")
+              : m_optLevel == plus::Level::Appearance ? tr("Appearance")
+              : m_optLevel == plus::Level::Info       ? tr("Info") : tr("More");
+    else if (!g.action.empty()) about = g.author;
     else if (g.homebrew && !g.path.empty()) about = g.author.empty() ? tr("Homebrew") : trf("Homebrew by {author}", {g.author});
     else about = trf("{time} played", {playTime(g.playSeconds)}) + "    " + lastPlayed(g.lastPlayed);
-    if (!g.version.empty()) about += "    " + (versionName(g.version).empty() ? g.version : versionName(g.version));
+    if (m_optLevel == plus::Level::Top && !g.version.empty())
+        about += "    " + (versionName(g.version).empty() ? g.version : versionName(g.version));
     r.drawText(fit(m_fBody, about, maxW), {tx, kOptCard.y + 94.f + dy}, &m_fBody, kMuted.withAlpha(a));
 
     const std::string back = "B Back";
     textMid(r, m_fBody, back, kOptCard.x + kOptCard.width - 30.f - measured(m_fBody, back).x, kOptCard.y + kOptCard.height - 26.f + dy,
             kMuted.withAlpha(0.7f * a));
     // The buttons: an icon on a disc, its name; the first one (Play) white.
+    const bool wide = m_optLevel == plus::Level::Top;
     for (size_t i = 0; i < m_optItems.size(); ++i) {
         const MenuItem& item = m_optItems[i];
         const float ta = a * easeOut((m_optIn - 0.04f * static_cast<float>(i)) / 0.7f);
-        nxui::Rect row = optionRow(m_optItems.size(), i, dy);
+        nxui::Rect row = optionRow(m_optItems.size(), i, dy, wide);
         row.x += 16.f * (1.f - ta);
-        const bool chosen = static_cast<int>(i) == m_optSel, primary = i == 0;
+        const bool chosen = static_cast<int>(i) == m_optSel, primary = wide && i == 0;
         if (!item.glyph) { // Cancel: just the word
             const std::string w = item.label;
             textMid(r, m_fPill, w, row.x + (row.width - measured(m_fPill, w).x) * 0.5f, row.y + row.height * 0.5f,

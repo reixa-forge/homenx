@@ -87,6 +87,15 @@ Still getting {app}...	Aún descargando {app}...	Ainda baixando {app}...	{app} �
 Connect to the internet to get {app}.	Conéctate a internet para descargar {app}.	Conecte-se à internet para baixar {app}.	Подключитесь к интернету, чтобы скачать {app}.	Connectez-vous à Internet pour obtenir {app}.	Verbinde dich mit dem Internet, um {app} zu laden.	Connettiti a Internet per scaricare {app}.	{app}を入手するにはインターネットに接続してください。	请连接互联网以获取{app}。	{app} indirmek için internete bağlan.
 Getting {app} from GitHub...	Descargando {app} de GitHub...	Baixando {app} do GitHub...	Загрузка {app} с GitHub...	Téléchargement de {app} depuis GitHub...	{app} wird von GitHub geladen ...	Download di {app} da GitHub...	GitHubから{app}を取得中...	正在从GitHub获取{app}...	{app} GitHub'dan indiriliyor...
 Move	Mover	Mover	Переместить	Déplacer	Verschieben	Sposta	移動	移动	Taşı
+Rearrange	Reordenar	Reorganizar	Переставить	Réorganiser	Anordnen	Riordina	並べ替え	重新排列	Yeniden düzenle
+Move to…	Mover a…	Mover para…	Переместить в…	Déplacer vers…	Verschieben nach…	Sposta in…	移動先…	移到…	Şuraya taşı…
+Appearance…	Apariencia…	Aparência…	Оформление…	Apparence…	Aussehen…	Aspetto…	見た目…	外观…	Görünüm…
+Info…	Información…	Informações…	Сведения…	Infos…	Info…	Info…	情報…	信息…	Bilgi…
+More…	Más…	Mais…	Ещё…	Plus…	Mehr…	Altro…	その他…	更多…	Diğer…
+Move to	Mover a	Mover para	Переместить в	Déplacer vers	Verschieben nach	Sposta in	移動先	移到	Şuraya taşı
+Appearance	Apariencia	Aparência	Оформление	Apparence	Aussehen	Aspetto	見た目	外观	Görünüm
+Info	Información	Informações	Сведения	Infos	Info	Info	情報	信息	Bilgi
+More	Más	Mais	Ещё	Plus	Mehr	Altro	その他	更多	Diğer
 Done	Listo	Pronto	Готово	Terminé	Fertig	Fatto	完了	完成	Bitti
 Settings tab order  (< > moves a tab)	Orden de las pestañas de Ajustes  (< > mueve una pestaña)	Ordem das abas de Configurações  (< > move uma aba)	Порядок вкладок настроек  (< > перемещает вкладку)	Ordre des onglets des paramètres  (< > déplace un onglet)	Reihenfolge der Einstellungs-Tabs  (< > verschiebt einen Tab)	Ordine delle schede delle impostazioni  (< > sposta una scheda)	設定のタブの順番  (< > でタブを移動)	设置标签顺序  (< > 移动标签)	Ayarlar sekme sırası  (< > sekmeyi taşır)
 Page order  (< > moves a page)	Orden de las páginas  (< > mueve una página)	Ordem das páginas  (< > move uma página)	Порядок страниц  (< > перемещает страницу)	Ordre des pages  (< > déplace une page)	Seitenreihenfolge  (< > verschiebt eine Seite)	Ordine delle pagine  (< > sposta una pagina)	ページの順番  (< > でページを移動)	页面顺序  (< > 移动页面)	Sayfa sırası  (< > sayfayı taşır)
@@ -374,7 +383,7 @@ Checking...	Comprobando...	Verificando...	Проверка...	Vérification...	P
 Up to date	Actualizado	Atualizado	Обновлено	À jour	Aktuell	Aggiornato	最新です	已是最新	Güncel
 Home style (NXToggle)	Estilo de HOME (NXToggle)	Estilo do HOME (NXToggle)	Стиль HOME (NXToggle)	Style de HOME (NXToggle)	HOME-Stil (NXToggle)	Stile della HOME (NXToggle)	HOMEのスタイル（NXToggle）	HOME样式（NXToggle）	Ana ekran stili (NXToggle)
 NXToggle isn't there yet: restart the console once.	NXToggle aún no está: reinicia la consola una vez.	O NXToggle ainda não está lá: reinicie o console uma vez.	NXToggle ещё нет: перезапустите консоль один раз.	NXToggle n'est pas encore là : redémarrez la console une fois.	NXToggle ist noch nicht da: Starte die Konsole einmal neu.	NXToggle non c'è ancora: riavvia la console una volta.	NXToggleはまだありません。本体を一度再起動してください。	NXToggle还不存在：请重新启动主机一次。	NXToggle henüz yok: konsolu bir kez yeniden başlat.
-About	Información	Sobre	О программе	À propos	Info	Informazioni	情報	关于	Hakkında
+About	Información	Sobre	О программе	À propos	Über	Informazioni	情報	关于	Hakkında
 System version	Versión del sistema	Versão do sistema	Версия системы	Version du système	Systemversion	Versione del sistema	システムバージョン	系统版本	Sistem sürümü
 Free on the SD card	Libre en la tarjeta SD	Livre no cartão SD	Свободно на SD-карте	Libre sur la carte SD	Frei auf der SD-Karte	Libero sulla scheda SD	SDカードの空き容量	SD卡剩余空间	SD kartta boş alan
 Terms, privacy, licenses	Términos, privacidad, licencias	Termos, privacidade, licenças	Условия, конфиденциальность, лицензии	Conditions, confidentialité, licences	Bedingungen, Datenschutz, Lizenzen	Termini, privacy, licenze	利用規約、プライバシー、ライセンス	条款、隐私、许可	Koşullar, gizlilik, lisanslar

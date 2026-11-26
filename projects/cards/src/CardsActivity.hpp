@@ -3,6 +3,7 @@
 #include "GameMusic.hpp"
 #include "Library.hpp"
 #include "Mtp.hpp"
+#include "PlusMenu.hpp"
 #include "Settings.hpp"
 #include <switchu/lock_screen_policy.hpp>
 #include "Spotify.hpp"
@@ -668,6 +669,11 @@ private:
     float m_optIn = 0.f;
     Game m_optGame;
     std::vector<MenuItem> m_optItems;
+    plus::Level m_optLevel = plus::Level::Top; // the level shown: the top, or a group opened in the same sheet
+    plus::Card plusCard(const Game& g) const;   // the facts that choose its entries
+    MenuItem plusItem(plus::Entry e, const Game& g); // one entry: its label, glyph and action
+    void showOptionLevel(plus::Level level);     // fills the sheet with that level's entries
+    std::vector<MenuItem> moveLevelItems(const Game& g); // Move to…'s entries
     void updateOptions();
     bool optionsTouch();
     void drawOptions(nxui::Renderer& r);
