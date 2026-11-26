@@ -61,3 +61,5 @@ c++ -std=gnu++20 -Itests/support -Ilib/nxui/include -Iprojects/menu/src -Iprojec
     projects/menu/src/core/WidgetStore.cpp projects/menu/src/core/WidgetModel.cpp -o "$test_dir/widget-test"
 ASAN_OPTIONS=detect_leaks=0 timeout --kill-after=5s 20s "$test_dir/widget-test"
 echo 'Widget model tests passed.'
+c++ -std=gnu++20 -Iprojects/common/include "${sanitizer_flags[@]}" tests/safe_file_test.cpp -o "$test_dir/safe-file-test"
+ASAN_OPTIONS=detect_leaks=0 timeout --kill-after=5s 20s "$test_dir/safe-file-test"

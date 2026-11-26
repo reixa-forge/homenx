@@ -12,6 +12,8 @@
 #include "util/strings.h"
 
 #include <switch.h>
+#include <switchu/safe_file.hpp>
+#include <switchu/sd_commit.hpp>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -95,6 +97,7 @@ void DiscordService::beginShutdown() {
 // busy); the session, the store and the account stay, and the wake resumes
 // the session, so the open chat and the alerts of what came meanwhile stay.
 void DiscordService::sleep() {
+    if (m_pausedForSleep) return; // the menu and the daemon can both announce one sleep
     m_pausedForSleep = started() && m_gateway;
     if (!m_pausedForSleep) return;
     DebugLog::log("[discord] pausing for the console's sleep");
@@ -168,12 +171,22 @@ void DiscordService::loadAccounts() {
             if (x.token == a.token || (!a.id.empty() && x.id == a.id)) return;
         m_accounts.push_back(std::move(a));
     };
-    for (const char* path : {kAccountsPath, kSwitchCordAccounts}) {
-        const std::string text = readAll(path);
+    // HomeNX's own file: the first complete copy of discord.json, .tmp, .bak (a save cut
+    // short by a crash or power loss signed the account out). Then SwitchCord's.
+    std::vector<std::string> paths;
+    for (const std::string& path : switchu::safeFileCandidates(kAccountsPath)) paths.push_back(path);
+    paths.emplace_back(kSwitchCordAccounts);
+    bool haveLocal = false;
+    for (const std::string& path : paths) {
+        const bool local = path != kSwitchCordAccounts;
+        if (local && haveLocal) continue;
+        const std::string text = readAll(path.c_str());
         if (text.empty()) continue;
         J::Doc doc = J::Parse(text);
         yyjson_val* root = J::Root(doc);
-        if (path == kAccountsPath) {
+        if (!yyjson_is_obj(root)) continue;
+        if (local) {
+            haveLocal = true;
             m_current = J::S(root, "current");
             for (yyjson_val* id : J::Arr(root, "signed_out"))
                 if (yyjson_is_str(id)) m_signedOut.push_back(yyjson_get_str(id));
@@ -204,7 +217,8 @@ void DiscordService::saveAccounts() const {
     out += "]}\n";
     std::error_code ec;
     std::filesystem::create_directories("sdmc:/config/SwitchU", ec);
-    std::ofstream(kAccountsPath, std::ios::trunc) << out;
+    if (!switchu::replaceFileSafely(kAccountsPath, out, [](const char* why) { return switchu::commitSdCard(why); }))
+        DebugLog::log("[discord] could not save the accounts safely; the previous copy stays");
 }
 
 void DiscordService::activate() {
@@ -1058,7 +1072,9 @@ bool DiscordService::takeAlert(Alert& out) {
 
 bool DiscordService::hasSavedAccount() const {
     std::error_code ec;
-    return std::filesystem::exists(kAccountsPath, ec) || std::filesystem::exists(kSwitchCordAccounts, ec);
+    for (const std::string& path : switchu::safeFileCandidates(kAccountsPath))
+        if (std::filesystem::exists(path, ec)) return true;
+    return std::filesystem::exists(kSwitchCordAccounts, ec);
 }
 
 // The Discord overlay can't afford the API's DM and server lists (most of a MB
