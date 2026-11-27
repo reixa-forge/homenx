@@ -533,7 +533,15 @@ private:
     int launchStyle() const;
     bool launchDrawsCard() const; // the chosen card is drawn by drawLaunch (zoom, flip)
     float othersAlpha() const;
-    float menuHide() const; // a menu over HOME (+, the details, a channel): how far the games behind have gone (0..1)    // the rest of the row while launching
+    float menuHide() const; // a menu over HOME: how far the games behind have gone (0..1), m_coverIn
+    // Any menu over HOME (+, its lists, a picker, the details, a channel, Settings,
+    // the bar's menus): the games and the panel go, and the top bar with them
+    // unless the menu hangs from it. One pace for all, held while one menu hands
+    // over to the next, so nothing shows through in between (no flicker).
+    bool menuCovers() const;
+    bool menuCoversBar() const;
+    float m_coverIn = 0.f, m_coverIdle = 1.f; // the games: 0 shown .. 1 gone; seconds with no menu
+    float m_barCoverIn = 0.f, m_barCoverIdle = 1.f; // the top bar, the same
     void comeBack(); // it didn't happen: the screen as it was
     void handleHome();
     void askClose(); // X: close the open game or app, after asking
