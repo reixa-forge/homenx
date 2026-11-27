@@ -1051,8 +1051,6 @@ bool CardsActivity::wantsFullRate() const {
                     m_quickListIn})
         if (v < 1.f) return true;
     if (m_optOut > 0.f || m_menuOut > 0.f) return true; // (closing: they fade down to 0)
-    if (m_coverIn != (menuCovers() ? 1.f : 0.f) || m_barCoverIn != (menuCoversBar() ? 1.f : 0.f))
-        return true; // what's behind a menu, going or coming back
     const float target = static_cast<float>(m_sels[m_page]);
     if (m_scroll != target) return true;
     if (m_locked && (m_lockIn < 1.f || m_unlockT >= 0.f)) return true;
@@ -3825,8 +3823,6 @@ bool CardsActivity::closeEverything() {
     m_dotsOpen = false;
     m_optOpen = false;
     m_optOut = 0.f; // (all at once: nothing fades over the lock or the game)
-    m_coverIn = m_barCoverIn = 0.f;
-    m_coverIdle = m_barCoverIdle = 1.f;
     m_pickOpen = false;
     m_musicOpen = false;
     if (m_moving) finishMove(false);
@@ -10400,18 +10396,6 @@ void CardsActivity::onUpdate(float dt) {
     auto fade = [&](float& v, float seconds) { v = motion ? std::max(0.f, v - std::min(dt, 1.f / 30.f) / seconds) : 0.f; };
     fade(m_optOut, cards::motion::kClose);
     fade(m_menuOut, cards::motion::kClose);
-    { // What's behind a menu: gone at one pace, and held for a moment between two
-      // menus (+ > a list, a list > a picker) so it doesn't flash back in between.
-        const float t = std::min(dt, 1.f / 30.f);
-        auto cover = [&](float& v, float& idle, bool open) {
-            idle = open ? 0.f : idle + t;
-            const bool on = open || idle < 0.15f;
-            if (!motion) v = on ? 1.f : 0.f;
-            else v = on ? std::min(1.f, v + t / cards::motion::kSheetOpen) : std::max(0.f, v - t / cards::motion::kClose);
-        };
-        cover(m_coverIn, m_coverIdle, menuCovers());
-        cover(m_barCoverIn, m_barCoverIdle, menuCoversBar());
-    }
     if (m_menu.empty() && m_menuOut <= 0.f) { // the list has finished closing
         m_menuGhost.clear();
         m_menuKeepDim = false;
@@ -11372,6 +11356,7 @@ void CardsActivity::draw(nxui::Renderer& r) {
     drawStep("draw: the background");
     drawBackground(r);
     drawStep("draw: the cards");
+    m_glassTookCopy = false;
     if (!m_settings.xmbView) drawCards(r);
     drawStep("draw: the glass");
     // One blurred copy of the frame for every glass shape on top of it, made
@@ -11401,7 +11386,12 @@ void CardsActivity::draw(nxui::Renderer& r) {
                          || focusRoot() != nullptr || m_gridSlideT < 1.f || m_gridDrag != 0.f || m_gridSettle != 0.f || m_gridBumpT >= 0.f
                          || !m_glides.empty() || m_moveJiggle > 0.f || std::abs(m_gridIn - (gridOn() ? 1.f : 0.f)) > 0.f
                          || m_time - m_artArrivedAt < 0.4f
-                         || (m_coverIn > 0.f && m_coverIn < 1.f) || (m_barCoverIn > 0.f && m_barCoverIn < 1.f); // (fading under a menu's glass)
+                         || m_glassTookCopy; // (see below)
+        // The grid's tiles (liquid glass) take the frame into the same copy as they're
+        // drawn, before this: kept as it was, every glass shape over HOME (the top
+        // bar's buttons, the menus, the panels) showed that sharp, half-drawn copy
+        // (the background and only some tiles) for 59 frames in 60, then the right
+        // one for a frame: the flicker behind menus and in the bar's buttons.
         if (moving || ++m_blurAge >= 60) {
             r.captureToOffscreen(false);
             r.applyBlur(2.5f, 2);
@@ -11423,12 +11413,10 @@ void CardsActivity::draw(nxui::Renderer& r) {
         const float t = std::clamp(m_crossInfoIn, 0.f, 1.f), lift = t * t * (3.f - 2.f * t);
         m_barLift = 140.f * lift;
     }
-    const float barShown = 1.f - easeOut(m_barCoverIn), gamesShown = 1.f - easeOut(m_coverIn);
-    if (barShown > 0.f) drawTopBar(r, easeOut(m_intro * 2.2f) * ui * barShown);
-    if (gamesShown > 0.f) drawGameCard(r, easeOut(m_intro * 2.2f) * ui * gamesShown);
+    drawTopBar(r, easeOut(m_intro * 2.2f) * ui * (m_barLift >= 139.f ? 0.f : 1.f));
+    drawGameCard(r, easeOut(m_intro * 2.2f) * ui);
     drawStep("draw: the panel");
-    if (!m_settings.xmbView && !noPanel() && gamesShown > 0.f)
-        drawPanel(r, easeOut((m_intro - 0.25f) * 2.f) * ui * (1.f - easeOut(m_gridIn)) * gamesShown);
+    if (!m_settings.xmbView && !noPanel()) drawPanel(r, easeOut((m_intro - 0.25f) * 2.f) * ui * (1.f - easeOut(m_gridIn)));
     drawStep("draw: the messages");
     if (m_moving && !gridOn()) { // what Move does (the grid says it in its pill, as SwitchU)
         const std::string hint = "Move it with  < >      A  Done      B  Put it back";
@@ -12770,8 +12758,7 @@ void CardsActivity::drawCrossRow(nxui::Renderer& r) {
     m_crossDrawnAt = m_time;
     const float k = m_settings.motion ? std::min(1.f, dt * 14.f) : 1.f;
     m_crossListIn = std::min(1.f, m_crossListIn + dt * 5.f);
-    // (a menu over it: all of it goes, as the cards do)
-    const float intro = easeOut(m_intro * 2.2f) * (1.f - easeOut(m_coverIn));
+    const float intro = easeOut(m_intro * 2.2f);
     const float listA = intro * easeOut(m_crossListIn);
     const float slide = (1.f - easeOut(m_crossListIn)) * 50.f;
 
@@ -13712,8 +13699,7 @@ void CardsActivity::drawCrossList(nxui::Renderer& r) {
     m_crossRow += (static_cast<float>(std::max(0, sel())) - m_crossRow) * k;
     m_crossSysRow += (static_cast<float>(m_crossSysSel) - m_crossSysRow) * k;
     m_crossListIn = std::min(1.f, m_crossListIn + dt * 5.f);
-    // (a menu over it: all of it goes, as the cards do)
-    const float intro = easeOut(m_intro * 2.2f) * (1.f - easeOut(m_coverIn));
+    const float intro = easeOut(m_intro * 2.2f);
     const float listA = intro * easeOut(m_crossListIn);
     const float listDx = (1.f - easeOut(m_crossListIn)) * 40.f;
 
@@ -14242,6 +14228,7 @@ void CardsActivity::drawGrid(nxui::Renderer& r) {
                      const nxui::Color& highlight, float borderW, float op) {
         if (shader) {
             r.captureToOffscreen(true);
+            m_glassTookCopy = true; // (the blurred copy is made again after the tiles: draw())
             r.drawLiquidGlass(0, rc, radius, base, op, 0.f);
         } else {
             nxui::Color body = base;
@@ -14849,31 +14836,13 @@ bool CardsActivity::launchDrawsCard() const {
     return m_leaving && m_leaveIndex >= 0 && (style == kZoom || style == kFlip);
 }
 
-// A menu over HOME (the + options, the details panel, a channel open): the games
-// behind fade away with it, as the top bar does for the details, instead of
-// showing (and changing) through it.
-float CardsActivity::menuHide() const { return clamp01(m_coverIn); }
-
-bool CardsActivity::menuCoversBar() const {
-    bool text = false;
-#ifdef SWITCHU_MENU
-    text = m_textEntry && m_textEntry->isActive();
-#endif
-    return m_optOpen || !m_menu.empty() || m_pickOpen || m_chanOpen || m_crossInfo || m_sheetOpen || m_logOpen
-        || m_musicOpen || m_powerOpen || m_spQrOpen || m_task != Task::None || text;
-}
-
-// (the bar's own menus, which hang from its buttons: the games go, the bar stays)
-bool CardsActivity::menuCovers() const { return menuCoversBar() || m_dotsOpen || m_quickOpen || m_notifOpen; }
-
 float CardsActivity::othersAlpha() const {
-    const float shown = 1.f - easeOut(menuHide());
-    if (!m_leaving) return shown;
+    if (!m_leaving) return 1.f;
     switch (launchStyle()) {
         case kFade:
-        case kNoAnimation: return shown; // the screen dims over them
-        case kDive: return shown * (1.f - smoothstep(0.45f, 0.85f, m_leaveT));
-        default: return shown * (1.f - easeIn(m_leaveT / 0.5f));
+        case kNoAnimation: return 1.f; // the screen dims over them
+        case kDive: return 1.f - smoothstep(0.45f, 0.85f, m_leaveT);
+        default: return 1.f - easeIn(m_leaveT / 0.5f);
     }
 }
 
